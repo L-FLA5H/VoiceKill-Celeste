@@ -1,0 +1,7 @@
+- Name: VoiceKill
+  Version: 0.9.4
+  Author: L_FLA5H
+  DLL: bin/VoiceKill.dll
+  Dependencies:
+    - Name: EverestCore
+      Version: 1.5935.0

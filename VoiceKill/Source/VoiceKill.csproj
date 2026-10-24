@@ -1,0 +1,130 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>VoiceKill</AssemblyName>
+    <RootNamespace>Celeste.Mod.VoiceKill</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+
+    <!-- 类库工程默认不把 NuGet 依赖复制到输出目录，必须手动打开，
+         否则 sherpa-onnx.dll / NAudio.dll / 原生库全都不会进 mod 包。 -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+
+    <!-- 开发目录不在 Celeste 里，所以默认写死他的安装路径；也可以 /p:CelestePrefix=... 覆盖 -->
+    <CelestePrefix Condition="'$(CelestePrefix)' == '' And Exists('..\..\..\Celeste.dll')">..\..\..</CelestePrefix>
+    <CelestePrefix Condition="'$(CelestePrefix)' == ''">D:\Steam\steamapps\common\Celeste</CelestePrefix>
+
+    <ZippedFiles>..\everest.yaml;..\bin\**\*.*</ZippedFiles>
+
+    <!-- GDI+ 只在 Windows 上有，Celeste 也只跑 Windows，不用每条都警告 -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <!-- 注意：不要用 ItemDefinitionGroup 统一给 PackageReference 加 ExcludeAssets="runtime"，
+       它会把 sherpa-onnx / NAudio 的托管库和原生库一起排除掉，build 一点错都不报，
+       跑起来才炸。改成逐个声明。 -->
+  <ItemGroup>
+    <Reference Include="$(CelestePrefix)\MMHOOK_Celeste.dll" Private="false" />
+    <Reference Include="$(CelestePrefix)\FNA.dll" Private="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MonoMod.RuntimeDetour" Version="25.3.1" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="MonoMod.Patcher" Version="25.0.0-prerelease.2" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="CelesteAnalyzer" Version="*" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="CelesteMod.Publicizer" Version="*" CelesteAssembly="$(CelestePrefix)\Celeste.dll" PrivateAssets="all" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <!-- 这两个要真的带进 mod -->
+  <ItemGroup>
+    <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.13.5" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <!-- 中文危险词要画进游戏：Celeste 自带字体没有中文字形，只能 GDI+ 预渲染成贴图 -->
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+  </ItemGroup>
+
+  <!-- 控制面板页面打成内嵌资源，不依赖外部文件路径 -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\panel.html" />
+  </ItemGroup>
+
+  <!-- 核心逻辑直接编进同一个 dll，省得 Everest 去解析额外依赖 -->
+  <ItemGroup>
+    <Compile Include="..\..\VoiceKill.Core\*.cs" Link="Core\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <Target Name="CopyFiles" AfterTargets="Build">
+    <ItemGroup>
+      <ModDlls Include="$(OutputPath)*.dll" />
+      <ModPdbs Include="$(OutputPath)*.pdb" />
+      <ModNatives Include="$(OutputPath)runtimes\win-x64\native\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ModDlls)" DestinationFolder="..\bin" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(ModPdbs)" DestinationFolder="..\bin" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(ModNatives)" DestinationFolder="..\bin" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="PackageMod" AfterTargets="CopyFiles" Inputs="$(ZippedFiles)" Outputs="..\VoiceKill.zip" Condition="'$(Configuration)' == 'Release'">
+    <ItemGroup>
+      <FilesToPackage Include="$(ZippedFiles)" />
+    </ItemGroup>
+    <PackageMod Files="@(FilesToPackage)" OutputPath="..\VoiceKill.zip" />
+  </Target>
+
+  <PropertyGroup>
+    <PathMap>$(MSBuildProjectDirectory)=VoiceKill/</PathMap>
+  </PropertyGroup>
+
+  <UsingTask TaskName="PackageMod"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Files ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="true" />
+      <OutputPath ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.IO.Compression" />
+      <Code Type="Fragment" Language="cs">
+        <![CDATA[
+                var projectDir = Path.Combine(@"$(ProjectDir)", "..");
+                projectDir = Uri.UnescapeDataString(projectDir);
+
+                if (File.Exists(OutputPath))
+                    File.Delete(OutputPath);
+
+                using (ZipArchive zip = ZipFile.Open(OutputPath, ZipArchiveMode.Create))
+                {
+                    foreach (var file in Files)
+                    {
+                        string filePath = file.GetMetadata("FullPath");
+                        if (!File.Exists(filePath)) continue;
+                        string entryName = GetRelativePath(projectDir, filePath);
+
+                        zip.CreateEntryFromFile(filePath, entryName);
+                    }
+                }
+
+                string GetRelativePath(string fromPath, string toPath)
+                {
+                    Uri fromUri = new Uri(fromPath);
+                    Uri toUri = new Uri(toPath);
+                    if (fromUri.Scheme != toUri.Scheme) { return toPath; }
+
+                    Uri relativeUri = fromUri.MakeRelativeUri(toUri);
+                    string relativePath = Uri.UnescapeDataString(relativeUri.ToString());
+
+                    if (toUri.Scheme.Equals("file", StringComparison.InvariantCultureIgnoreCase))
+                        relativePath = relativePath.Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+                    return relativePath;
+                }
+        ]]>
+      </Code>
+    </Task>
+  </UsingTask>
+
+</Project>

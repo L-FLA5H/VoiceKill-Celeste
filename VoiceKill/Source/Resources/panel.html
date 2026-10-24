@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>VoiceKill 控制台</title>
+<style>
+  :root{--accent:#3FBEEF;--bg:#0b0f14;--card:#121821;--line:#22303f;
+        --text:#e6edf3;--dim:#7f8c9b;--red:#ff6b6b;--green:#37d67a;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;font-size:14px}
+  header{display:flex;align-items:center;gap:12px;padding:13px 22px;background:var(--card);
+    border-bottom:1px solid var(--line);position:sticky;top:0;z-index:9}
+  header h1{margin:0;font-size:16px;color:var(--accent);letter-spacing:2px;font-weight:800}
+  .dot{width:8px;height:8px;border-radius:50%;background:#4b5563;display:inline-block}
+  .dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
+  .dot.off{background:#e5534b}
+  .meta{color:var(--dim);font-size:12.5px}
+  main{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:14px 22px 48px;align-items:start}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card.wide{grid-column:1/-1}
+  .card.hide{display:none}
+  .card h2{margin:0 0 10px;font-size:13px;color:var(--accent);letter-spacing:1px;font-weight:700;
+    display:flex;align-items:center;gap:8px}
+  .card h2 small{color:var(--dim);font-weight:400;letter-spacing:0}
+  .step{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+  .step .num{width:22px;height:22px;border-radius:50%;background:rgba(63,190,239,.18);
+    color:var(--accent);font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;min-height:40px}
+  .chip{display:inline-flex;align-items:center;gap:8px;padding:6px 11px;border-radius:9px;
+    font-size:17px;font-weight:700;background:rgba(63,190,239,.13);border:1px solid rgba(63,190,239,.45)}
+  .chip.hell{background:rgba(255,90,90,.13);border-color:rgba(255,110,110,.55)}
+  .chip.smart{background:rgba(186,148,255,.13);border-color:rgba(186,148,255,.5)}
+  .chip .tag{font-size:11px;font-weight:400;color:var(--dim)}
+  .chip .x,.bank i{cursor:pointer;color:#8b98a8;font-weight:400;font-style:normal;padding:0 2px;border-radius:4px}
+  .chip .x:hover,.bank i:hover{color:var(--red);background:rgba(255,107,107,.12)}
+  .row{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  input[type=text],textarea,select{background:#0a0e13;color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:8px 10px;font-family:inherit;font-size:13px}
+  textarea{width:100%;min-height:52px;resize:vertical}
+  input[type=text]{flex:1;min-width:120px}
+  select{min-width:150px}
+  button{background:rgba(63,190,239,.15);color:var(--accent);border:1px solid rgba(63,190,239,.5);
+    border-radius:9px;padding:8px 15px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer}
+  button:hover{background:rgba(63,190,239,.28)}
+  button.ghost{background:transparent;color:var(--dim);border-color:var(--line)}
+  button.on{background:rgba(63,190,239,.3);color:#fff;border-color:var(--accent)}
+  .seg{display:flex;gap:6px;flex-wrap:wrap}
+  .timer{font-size:32px;font-weight:900;color:var(--accent);line-height:1}
+  .slider{display:grid;grid-template-columns:96px 1fr 52px;gap:10px;align-items:center;margin:9px 0}
+  .slider label{color:var(--dim);font-size:13px}
+  .slider input[type=range]{width:100%;accent-color:var(--accent)}
+  .slider b{color:var(--text);font-size:13px;text-align:right}
+  .hot{display:flex;flex-wrap:wrap;gap:7px;min-height:34px}
+  .hot span{display:inline-flex;gap:6px;align-items:center;padding:5px 10px;border-radius:8px;
+    background:rgba(255,90,90,.10);border:1px solid rgba(255,110,110,.42);cursor:pointer;font-weight:700}
+  .hot span:hover{background:rgba(255,90,90,.22)}
+  .hot i{font-style:normal;color:var(--dim);font-weight:400;font-size:12px}
+  .tabs{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+  .tabs button{padding:6px 13px;font-size:12.5px;background:transparent;color:var(--dim);border-color:var(--line)}
+  .tabs button.on{background:rgba(63,190,239,.16);color:var(--accent);border-color:rgba(63,190,239,.5)}
+  .bank{display:flex;flex-wrap:wrap;gap:6px;max-height:200px;overflow:auto}
+  .bank span{display:inline-flex;gap:6px;align-items:center;padding:4px 9px;border-radius:7px;font-size:13px;
+    background:rgba(255,255,255,.05);border:1px solid var(--line);cursor:pointer}
+  .bank span:hover{border-color:rgba(63,190,239,.6);color:var(--accent)}
+  .bank span.off{opacity:.45;text-decoration:line-through}
+  #log{max-height:220px;overflow:auto;font-size:13px;line-height:1.75}
+  #log div{border-bottom:1px dashed rgba(255,255,255,.06);padding:2px 0}
+  #log .kill{color:#ff8a8a;font-weight:700}
+  #hist div{border-bottom:1px dashed rgba(255,255,255,.06);padding:4px 0;font-size:13px}
+  #hist b{color:var(--dim);font-weight:400;margin-right:8px;font-size:12px}
+  #simResult{margin-top:8px;font-size:13px;min-height:20px}
+  .ok{color:var(--green);font-weight:700}
+  .no{color:#8b98a8}
+  #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:rgba(63,190,239,.95);
+    color:#04121a;font-weight:700;padding:9px 18px;border-radius:10px;opacity:0;transition:.2s;pointer-events:none}
+  #toast.on{opacity:1}
+  .hint{color:var(--dim);font-size:12px;margin-top:6px;line-height:1.6}
+  .big{font-size:15px}
+  @media (max-width:900px){ main{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+<header>
+  <h1>VoiceKill 控制台</h1>
+  <span class="meta"><span id="dEngine" class="dot"></span> 引擎</span>
+  <span class="meta"><span id="dRoom" class="dot"></span> <span id="modeText">单人</span></span>
+  <span style="flex:1"></span>
+  <span class="meta">累计 <b id="deathCount">0</b> 次</span>
+</header>
+
+<div id="fatalBar" style="display:none;margin:14px 22px 0;padding:12px 16px;border-radius:10px;
+  background:rgba(255,80,80,.14);border:1px solid rgba(255,110,110,.6);color:#ffb3b3;font-size:13.5px;line-height:1.7">
+  <b>VoiceKill 没能启动：</b><span id="fatalText"></span>
+  <div style="color:#8b98a8;margin-top:4px">面板本身是好的，说明 HTTP 服务正常。按上面的提示改完设置后重启游戏即可。</div>
+</div>
+
+<main>
+  <!-- ① 开始 -->
+  <section class="card wide">
+    <h2>开始 <small>照着 1-2-3 走一遍就能玩</small></h2>
+
+    <div class="step">
+      <span class="num">1</span><b>选麦克风</b>
+      <select id="micSel" style="flex:1"></select>
+      <button class="ghost" id="btnMic">重新连接</button>
+      <span class="meta" id="micHint">--</span>
+    </div>
+    <div class="row" style="margin:-4px 0 10px">
+      <div style="flex:1;height:10px;background:#0a0e13;border:1px solid var(--line);border-radius:6px;overflow:hidden">
+        <div id="micBar" style="height:100%;width:0%;background:linear-gradient(90deg,#3FBEEF,#37d67a);transition:width .1s"></div>
+      </div>
+      <span class="meta" id="micLevelText" style="min-width:160px">对着麦说句话试试</span>
+    </div>
+
+    <div class="step">
+      <span class="num">2</span><b>选玩法</b>
+      <div class="seg">
+        <button data-mode="0" class="modeBtn">单人自己玩</button>
+        <button data-mode="1" class="modeBtn">我开房（当主机）</button>
+        <button data-mode="2" class="modeBtn">加入别人的房</button>
+      </div>
+    </div>
+
+    <div class="step" id="joinRow" style="display:none">
+      <span class="num">3</span><b id="joinTitle">填主机的 IP 和口令</b>
+      <input type="text" id="hostUrl" placeholder="主机的局域网IP，如 192.168.1.10" style="max-width:280px">
+      <input type="text" id="roomKey" placeholder="口令" style="max-width:140px">
+      <button id="btnJoin">加入</button>
+    </div>
+
+    <div class="hint" id="modeHint">单人模式：只有你自己说话才算，词每 30 秒换一组。</div>
+  </section>
+
+  <!-- ② 开房后的设置 -->
+  <section class="card wide" id="roomCard">
+    <h2>联机设置 <small>只有开房才会用到</small></h2>
+    <div class="row" style="margin-bottom:10px">
+      <label class="meta" style="min-width:70px">声音来源</label>
+      <select id="srcSel">
+        <option value="0">只抓我的麦克风</option>
+        <option value="1">抓桌面音频（OOPZ / QQ 通话里所有人）</option>
+      </select>
+      <button class="ghost" id="btnSrc">应用</button>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <label class="meta" style="min-width:70px">踩雷之后</label>
+      <select id="scopeSel">
+        <option value="0">只死自己</option>
+        <option value="1">全员连坐</option>
+      </select>
+      <button class="ghost" id="btnScope">应用</button>
+    </div>
+
+    <div class="row" style="margin-bottom:8px">
+      <label class="meta" style="min-width:70px"><input type="checkbox" id="cOnlyHost"> 仅房主可改词</label>
+      <span class="meta" style="flex:1">勾上 = 只有主机能加词/换词；不勾 = 谁都能改，改动会转发给主机统一生效。</span>
+    </div>
+
+    <div class="row" id="syncRow" style="display:none">
+      <label class="meta" style="min-width:70px"><input type="checkbox" id="cSync"> 离线同步</label>
+      <span class="meta" style="flex:1">不联网：同口令 + 同一时间片算出同一组词。配合「抓桌面音频」= 伪多人同房。</span>
+    </div>
+
+    <div class="hint" style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(255,255,255,.08)">
+      <b style="color:#ffd27a">联机前提：两台电脑要能互相访问。</b><br>
+      · 同一个 WiFi / 路由器 → 直接填主机的内网 IP（192.168.x.x）<br>
+      · 不在同一个地方 → <b>需要你自行解决</b>：用 Radmin VPN / Tailscale / ZeroTier 组一个虚拟局域网，
+        再填它给你的 IP；或者自己搭内网穿透。<br>
+      · 本 mod <b>不提供中转服务器</b>，也不会自动穿越 NAT。
+    </div>
+
+    <div class="hint" id="roomHint"></div>
+  </section>
+
+  <!-- 本轮词 -->
+  <section class="card wide">
+    <div style="display:flex;align-items:flex-start;gap:16px">
+      <div style="flex:1">
+        <h2>本轮危险词 <small id="roundCount"></small></h2>
+        <div class="chips" id="words"></div>
+        <div class="row" style="margin-top:12px">
+          <input type="text" id="addCurrentInput" placeholder="加一个词到本轮，回车即生效">
+          <button id="btnAddCurrent">加</button>
+          <button class="ghost" id="btnRotate">立刻换一组</button>
+        </div>
+      </div>
+      <div class="timer"><span id="remain">--</span><small style="font-size:13px;color:#7f8c9b">s</small></div>
+    </div>
+  </section>
+
+  <!-- 下一轮 -->
+  <section class="card">
+    <h2>下一轮危险词 <small>留空 = 自动生成</small></h2>
+    <textarea id="nextBox" placeholder="空格或逗号隔开，例如：冲刺 super 金草莓"></textarea>
+    <div class="row" style="margin-top:9px">
+      <button id="btnNext">预定</button>
+      <button class="ghost" id="btnNextClear">取消预定</button>
+      <button class="ghost" id="btnHot">用最热的词当下一轮</button>
+    </div>
+    <div class="hint" id="nextHint"></div>
+  </section>
+
+  <!-- 选词设置 -->
+  <section class="card">
+    <h2>选词设置</h2>
+    <div class="slider"><label>每轮几个词</label><input type="range" id="sWords" min="1" max="20"><b id="vWords"></b></div>
+    <div class="slider"><label>高频地狱词</label><input type="range" id="sHell" min="0" max="10"><b id="vHell"></b></div>
+    <div class="slider"><label>轮换间隔</label><input type="range" id="sRound" min="5" max="120" step="5"><b id="vRound"></b></div>
+    <div class="slider"><label>智能概率</label><input type="range" id="sSmart" min="0" max="100" step="5"><b id="vSmart"></b></div>
+    <div class="slider"><label>智能词个数</label><input type="range" id="sSmartCount" min="0" max="8"><b id="vSmartCount"></b></div>
+    <div class="slider"><label>禁词大小</label><input type="range" id="sHud" min="40" max="100" step="5"><b id="vHud"></b></div>
+    <div class="row" style="margin-top:8px">
+      <label class="meta"><input type="checkbox" id="cHud"> 游戏里显示禁词</label>
+    </div>
+  </section>
+
+  <!-- 高频词 -->
+  <section class="card">
+    <h2>本周期高频词 <small>点一下塞进下一轮</small></h2>
+    <div class="hot" id="topCur"></div>
+  </section>
+  <section class="card">
+    <h2>上一周期高频词 <small>智能选词的来源</small></h2>
+    <div class="hot" id="topPrev"></div>
+  </section>
+
+  <!-- 模拟 -->
+  <section class="card">
+    <h2>模拟一句话 <small>不会真的死</small></h2>
+    <div class="row">
+      <input type="text" id="simText" placeholder="例如：我刚才冲刺没按出来">
+      <button id="btnSim">模拟</button>
+    </div>
+    <div id="simResult"></div>
+  </section>
+
+  <!-- 房间状态 -->
+  <section class="card" id="stateCard">
+    <h2>房间状态</h2>
+    <div class="hint" id="roomState">--</div>
+    <div class="row" style="margin-top:8px">
+      <button class="ghost" id="btnLeave">退出房间（回到单人）</button>
+    </div>
+  </section>
+
+  <!-- 词库 -->
+  <section class="card wide">
+    <h2>词库 <small id="bankCount"></small></h2>
+    <div class="tabs">
+      <button data-tab="custom" class="on">自定义</button>
+      <button data-tab="slang">游戏内置</button>
+      <button data-tab="hell">高频地狱</button>
+      <button data-tab="names">人名</button>
+    </div>
+    <div class="row" style="margin:2px 0 10px">
+      <input type="text" id="bankAdd" placeholder="给这个分类加一个新词" style="max-width:320px">
+      <button id="btnBankAdd">加</button>
+    </div>
+    <div class="bank" id="bankBox"></div>
+    <div class="hint" id="bankHint"></div>
+  </section>
+
+  <!-- 日志 -->
+  <section class="card">
+    <h2>实时</h2>
+    <div id="log"></div>
+  </section>
+  <section class="card">
+    <h2>换词历史</h2>
+    <div id="hist"></div>
+  </section>
+</main>
+<div id="toast"></div>
+<div id="jsErr" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:99;
+  padding:10px 16px;background:#7a1f1f;color:#ffd7d7;font-size:12px;line-height:1.6;
+  white-space:pre-wrap">脚本出错：<span id="jsErrText"></span></div>
+<script>
+window.onerror = function (m, src, line, col) {
+  var box = document.getElementById("jsErr");
+  var txt = document.getElementById("jsErrText");
+  if (box && txt) { box.style.display = "block"; txt.textContent = m + "  (行 " + line + ")"; }
+  return false;
+};
+</script>
+
+<script>
+var LAST = null, TAB = "custom", INITED = false, TYPING_NEXT = false;
+
+function toast(m){ var t=document.getElementById("toast"); t.textContent=m; t.className="on";
+  setTimeout(function(){ t.className=""; },1100); }
+function $(id){ return document.getElementById(id); }
+function post(path, body){
+  return fetch(path,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:body||""})
+    .then(function(r){return r.json();})
+    .then(function(j){ if(j&&j.ok===false) toast("操作失败"); return j; })
+    .catch(function(){ toast("请求失败"); });
+}
+function setHtml(id, html){
+  var el = $(id);
+  if (el._h === html) return;
+  el._h = html; el.innerHTML = html;
+}
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){
+  return c==="&"?"&amp;":c==="<"?"&lt;":c===">"?"&gt;":"&quot;"; }); }
+
+var SRC = { Manual:"手动", Name:"人名", Smart:"智能", Hell:"高频", Random:"随机" };
+
+/* ---------- 布局：按逻辑分步显示 ---------- */
+function applyLayout(st){
+  var mode = st.roomMode || 0;
+  document.querySelectorAll(".modeBtn").forEach(function(b){
+    b.classList.toggle("on", Number(b.dataset.mode) === mode);
+  });
+
+  $("joinRow").style.display = mode === 2 ? "flex" : "none";
+  $("roomCard").classList.toggle("hide", mode === 0);
+  $("stateCard").classList.toggle("hide", mode === 0);
+
+  // 离线同步只在「抓桌面音频」时出现
+  var desktop = Number(st.source) === 1;
+  $("syncRow").style.display = desktop ? "flex" : "none";
+
+  $("modeText").textContent = mode===1 ? ("主机 · "+st.roomKey) : (mode===2 ? "客户端" : "单人");
+  $("dRoom").className = "dot " + (mode ? (st.roomConnected ? "on" : "off") : "");
+
+  var mh = $("modeHint");
+  if (mode === 0) mh.innerHTML = "单人模式：只认你自己的声音，词每 " + st.roundSeconds + " 秒换一组。"
+      + "<br><span style=\"color:#8b98a8\">想一起玩请选「我开房」—— 注意联机要求两台电脑能互相访问（同 WiFi 或先组虚拟局域网）。</span>";
+  if (mode === 1) mh.innerHTML = "你是主机。别人在「加入别人的房」里填你的内网 IP（<b>" + esc((st.localIps||[])[0]||"本机IP")
+      + "</b>）和口令（<b>" + esc(st.roomKey) + "</b>）。跨地区需要先组虚拟局域网（见下方说明）。"
+      + (st.lanOpen
+          ? '<br><span style="color:#8b98a8">端口 ' + st.port + ' 已对局域网开放（只在开房时开；切回单人会关掉）</span>'
+          : '<br><span style="color:#ff9b9b">端口还没对外开放 —— 重启游戏后生效</span>');
+  else mh.innerHTML = "客户端：词跟着主机走，主机换词你 0.8 秒内跟上。"
+      + "<br><span style=\"color:#8b98a8\">填主机的内网 IP；跨地区就填组网工具给你的虚拟 IP。</span>";
+
+  $("roomState").innerHTML = mode === 0
+    ? "单机模式，没有连任何人。"
+    : (mode === 1
+        ? "主机中 · 口令 <b>"+esc(st.roomKey)+"</b> · 本机 IP <b>"+esc((st.localIps||[])[0]||"?")+"</b>"
+        : (st.roomConnected
+            ? "已连上主机 · 口令 <b>"+esc(st.roomKey)+"</b>"
+            : "还没连上 —— ① 主机选了「我开房」吗 ② IP 对不对 ③ 主机防火墙放行了吗"
+              + (st.roomError ? '<br><span style="color:#ff9b9b">错误：' + esc(st.roomError) + '</span>' : "")));
+}
+
+/* ---------- 词的渲染 ---------- */
+function renderWords(list){
+  var html = "";
+  for (var i=0;i<list.length;i++){
+    var w = list[i];
+    var cls = "chip" + (w.s==="Hell" ? " hell" : (w.s==="Smart" ? " smart" : ""));
+    html += '<div class="'+cls+'">'+esc(w.t)
+          + '<span class="tag">'+esc(SRC[w.s]||w.s)+'</span>'
+          + '<span class="x" data-rm="'+esc(w.t)+'">×</span></div>';
+  }
+  setHtml("words", html || '<span class="meta">（这一轮是空的）</span>');
+  $("roundCount").textContent = "（"+list.length+" 个）";
+}
+
+function renderHot(id, list){
+  var html = "";
+  for (var i=0;i<(list||[]).length;i++)
+    html += '<span data-hot="'+esc(list[i].t)+'">'+esc(list[i].t)+'<i>'+list[i].n+'</i></span>';
+  setHtml(id, html || '<span class="meta">（还没统计到）</span>');
+}
+
+/* ---------- 词库 ---------- */
+function renderBank(st){
+  var b = st.bank || {};
+  var custom=b.custom||[], slang=(b.casual||[]).concat(b.formal||[]), hell=b.hell||[];
+  var on=st.namesEnabled||[], off=st.namesDisabled||[];
+  var html = "", hint = "";
+
+  if (TAB === "custom"){
+    for (var i=0;i<custom.length;i++)
+      html += '<span data-bank="'+esc(custom[i])+'">'+esc(custom[i])+'<i data-del="'+esc(custom[i])+'">×</i></span>';
+    hint = "点词加进下一轮；× 从自定义词库删掉。往「下一轮」里写新词并预定，就会自动进这里。";
+  } else if (TAB === "slang"){
+    for (var j=0;j<slang.length;j++) html += '<span data-bank="'+esc(slang[j])+'">'+esc(slang[j])+'</span>';
+    hint = "蔚蓝玩家真会说的词（中文口语 + 英文术语）。点一下加进下一轮。";
+  } else if (TAB === "hell"){
+    var hellOn = b.hell||[], hellOff = b.hellOff||[];
+    for (var k=0;k<hellOn.length;k++) html += '<span data-hellon="'+esc(hellOn[k])+'">'+esc(hellOn[k])+'</span>';
+    for (var k2=0;k2<hellOff.length;k2++) html += '<span class="off" data-helloff="'+esc(hellOff[k2])+'">'+esc(hellOff[k2])+'</span>';
+    hint = "「高频地狱词」整段照搬 MC 版（含单字）。点词 = 开/关，关掉的只是不参与抽词；上面的输入框可以单独加新词。";
+  } else {
+    for (var m=0;m<on.length;m++)
+      html += '<span data-nameon="'+esc(on[m])+'">'+esc(on[m])+'<i data-namedel="'+esc(on[m])+'">×</i></span>';
+    for (var n=0;n<off.length;n++)
+      html += '<span class="off" data-nameoff="'+esc(off[n])+'">'+esc(off[n])+'<i data-namedel="'+esc(off[n])+'">×</i></span>';
+    hint = "点名字 = 开/关。关掉的只是不参与抽词，**不会删掉**（下次开房说不定又有人来）；× 才是彻底删除。";
+  }
+
+  var hellOnN = (b.hell||[]).length, hellOffN = (b.hellOff||[]).length;
+  $("bankCount").textContent = "自定义 "+custom.length+" / 内置 "+slang.length+" / 高频 "+hellOnN+"开 "+hellOffN+"关 / 人名 "+on.length+"开 "+off.length+"关";
+  $("bankHint").innerHTML = hint;
+  if (TAB === "names") $("bankHint").innerHTML = hint.replace(/\*\*/g,"");
+  setHtml("bankBox", html || '<span class="meta">（空）</span>');
+}
+
+/* ---------- 主轮询 ---------- */
+function poll(){
+  fetch("/state").then(function(r){return r.json();}).then(function(st){
+    LAST = st;
+    $("dEngine").className = "dot " + (st.ready?"on":"off");
+    $("deathCount").textContent = st.deaths;
+    $("remain").textContent = st.enabled ? st.remain : "关";
+    $("micHint").textContent = st.micOpen ? ("当前：" + (st.mic||"")) : ("未启动：" + (st.mic||""));
+    var lv = st.micLevel || 0;
+    $("micBar").style.width = Math.min(100, lv) + "%";
+    $("micLevelText").textContent = !st.micOpen ? "音频没启动"
+      : (lv < 3 ? "很安静 —— 说句话试试" : (lv < 12 ? "有点声音" : "声音正常 ✓"));
+
+    var fatal = st.fatal || "";
+    $("fatalBar").style.display = fatal ? "block" : "none";
+    if (fatal) $("fatalText").textContent = fatal;
+
+    applyLayout(st);
+    renderWords(st.words||[]);
+    renderHot("topCur", st.topCur);
+    renderHot("topPrev", st.topPrev);
+    renderBank(st);
+
+    // 下拉框（用户正在操作时不覆盖）
+    if (document.activeElement !== $("micSel")){
+      var sel = $("micSel"), list = st.micList||[], sig = list.join("|");
+      if (sel._sig !== sig){
+        sel._sig = sig;
+        var h = "";
+        for (var i=0;i<list.length;i++) h += '<option value="'+i+'">'+esc(list[i])+'</option>';
+        sel.innerHTML = h || '<option value="-1">（没找到录音设备）</option>';
+      }
+      sel.value = String(st.micIndex||0);
+    }
+    if (document.activeElement !== $("srcSel")) $("srcSel").value = String(st.source||0);
+    if (document.activeElement !== $("scopeSel")) $("scopeSel").value = String(st.deathScope||0);
+    if (document.activeElement !== $("hostUrl")) $("hostUrl").value = st.hostUrl || "";
+    if (document.activeElement !== $("roomKey")) $("roomKey").value = st.roomKey || "";
+    $("cSync").checked = !!st.offlineSync;
+    $("cOnlyHost").checked = st.onlyHost !== false;
+
+    if (!INITED){
+      INITED = true;
+      $("sWords").value = st.wordsPerRound; $("sHell").value = st.highFreqPerRound;
+      $("sRound").value = st.roundSeconds; $("sSmart").value = st.smartPick;
+      $("sHud").value = st.hudScale; $("cHud").checked = !!st.showHud;
+      $("sSmartCount").value = st.smartPerRound == null ? 2 : st.smartPerRound;
+      labels();
+    }
+    if (!TYPING_NEXT) $("nextBox").value = (st.nextWords||[]).join(" ");
+    $("nextHint").textContent = (st.nextWords||[]).length
+      ? "已预定 " + st.nextWords.length + " 个词，下次换词就用它们"
+      : "没预定，下一组自动生成";
+
+    var log="", ev=st.events||[];
+    for (var i=ev.length-1;i>=0;i--) log += '<div class="'+(ev[i].kill?"kill":"")+'">'+ev[i].t+" "+esc(ev[i].text)+"</div>";
+    setHtml("log", log || '<span class="meta">还没有听到任何声音</span>');
+
+    var h2="", hs=st.history||[];
+    for (var j=0;j<hs.length;j++) h2 += "<div><b>"+hs[j].t+"</b>"+esc(hs[j].text)+"</div>";
+    setHtml("hist", h2 || '<span class="meta">还没有换过词</span>');
+  }).catch(function(){}).then(function(){ setTimeout(poll, 800); });
+}
+
+function labels(){
+  $("vWords").textContent = $("sWords").value + " 个";
+  $("vHell").textContent  = $("sHell").value + " 个";
+  $("vRound").textContent = $("sRound").value + "s";
+  $("vSmart").textContent = $("sSmart").value + "%";
+  $("vSmartCount").textContent = $("sSmartCount").value + " 个";
+  $("vHud").textContent   = $("sHud").value + "%";
+}
+
+/* ---------- 交互 ---------- */
+document.querySelectorAll(".modeBtn").forEach(function(b){
+  b.onclick = function(){
+    var m = Number(b.dataset.mode);
+    if (m === 2){ post("/api/mode","mode=2").then(applyLayoutSoon); toast("填 IP 和口令，点加入"); return; }
+    post("/api/mode","mode="+m).then(function(){ toast(m===1 ? "已开房" : "已回到单人"); });
+  };
+});
+
+function applyLayoutSoon(){ if (LAST){ LAST.roomMode = 2; applyLayout(LAST); } }
+
+$("btnMic").onclick = function(){
+  post("/api/mic/set","index="+$("micSel").value).then(function(){ toast("已切换麦克风"); });
+};
+$("btnSrc").onclick = function(){
+  post("/api/source","source="+$("srcSel").value).then(function(){ toast("声音来源已切换"); });
+};
+$("btnScope").onclick = function(){
+  post("/api/deathscope","scope="+$("scopeSel").value).then(function(){ toast("已保存"); });
+};
+$("cOnlyHost").onchange = function(){
+  post("/api/config","onlyHost="+($("cOnlyHost").checked?1:0)).then(function(){ toast($("cOnlyHost").checked?"只允许房主改词":"任何人都能改词"); });
+};
+
+$("cSync").onchange = function(){
+  post("/api/sync","on="+($("cSync").checked?1:0)).then(function(){ toast($("cSync").checked?"离线同步已开":"离线同步已关"); });
+};
+$("btnJoin").onclick = function(){
+  var h = $("hostUrl").value.trim();
+  if (!h){ toast("先填主机 IP"); return; }
+  post("/api/room/join","host="+encodeURIComponent(h)+"&key="+encodeURIComponent($("roomKey").value))
+    .then(function(j){ if (j&&j.ok) toast("加入中…"); });
+};
+$("btnLeave").onclick = function(){ post("/api/room/leave").then(function(){ toast("已回到单人"); }); };
+
+["sWords","sHell","sRound","sSmart","sSmartCount","sHud"].forEach(function(id){
+  var el = $(id);
+  el.addEventListener("input", labels);
+});
+
+["sWords","sHell","sRound","sSmart","sSmartCount","sHud"].forEach(function(id){
+  $(id).addEventListener("change", function(){
+    labels();
+    post("/api/config", ["wordsPerRound="+$("sWords").value,
+      "highFreqPerRound="+$("sHell").value,
+      "roundSeconds="+$("sRound").value,
+      "smartPick="+$("sSmart").value,
+      "smartPerRound="+$("sSmartCount").value,
+      "hudScale="+$("sHud").value].join("&"));
+  });
+});
+$("cHud").onchange = function(){
+  post("/api/config","showHud="+($("cHud").checked?1:0));
+};
+
+$("words").addEventListener("click", function(e){
+  var t = e.target;
+  if (t.dataset && t.dataset.rm) post("/api/round/remove","text="+encodeURIComponent(t.dataset.rm));
+});
+function addCurrent(){
+  var v = $("addCurrentInput").value.trim();
+  if (!v){ toast("先写个词"); return; }
+  post("/api/round/add","text="+encodeURIComponent(v)).then(function(){
+    $("addCurrentInput").value=""; toast("加进本轮了");
+  });
+}
+$("btnAddCurrent").onclick = addCurrent;
+$("addCurrentInput").addEventListener("keydown", function(e){ if(e.key==="Enter") addCurrent(); });
+
+$("btnRotate").onclick = function(){ post("/api/rotate").then(function(){ toast("换了"); }); };
+
+$("nextBox").addEventListener("input", function(){ TYPING_NEXT = true; });
+$("nextBox").addEventListener("blur", function(){ TYPING_NEXT = false; });
+$("btnNext").onclick = function(){
+  TYPING_NEXT = false;
+  post("/api/next","words="+encodeURIComponent($("nextBox").value)).then(function(){ toast("已预定"); });
+};
+$("btnNextClear").onclick = function(){
+  $("nextBox").value=""; TYPING_NEXT=false;
+  post("/api/next/clear").then(function(){ toast("已取消"); });
+};
+$("btnHot").onclick = function(){
+  post("/api/next/hot").then(function(j){
+    if (j && j.words){ $("nextBox").value = j.words.split(",").join(" "); TYPING_NEXT=false; }
+    toast("已用最热的词");
+  });
+};
+
+["topCur","topPrev"].forEach(function(id){
+  $(id).addEventListener("click", function(e){
+    var t = e.target.closest ? e.target.closest("[data-hot]") : null;
+    if (!t) return;
+    var box = $("nextBox");
+    box.value = (box.value.trim() ? box.value.trim()+" " : "") + t.dataset.hot;
+    post("/api/next","words="+encodeURIComponent(box.value));
+    toast("塞进去了");
+  });
+});
+
+$("btnBankAdd").onclick = function(){
+  var v = $("bankAdd").value.trim();
+  if (!v){ toast("先写个词"); return; }
+  if (TAB === "custom"){
+    var cur = (LAST && LAST.bank && LAST.bank.custom) ? LAST.bank.custom.slice() : [];
+    if (cur.indexOf(v) < 0) cur.push(v);
+    post("/api/custom","words="+encodeURIComponent(cur.join(","))).then(function(){ $("bankAdd").value=""; toast("已加入自定义"); });
+  } else if (TAB === "hell"){
+    post("/api/highfreq/add","word="+encodeURIComponent(v)).then(function(){ $("bankAdd").value=""; toast("已加入高频词"); });
+  } else if (TAB === "names"){
+    post("/api/nameword/add","name="+encodeURIComponent(v)).then(function(){ $("bankAdd").value=""; toast("已加入人名"); });
+  } else {
+    toast("内置词是只读的，请用「自定义」分类加");
+  }
+};
+$("bankAdd").addEventListener("keydown", function(e){ if(e.key==="Enter") $("btnBankAdd").click(); });
+
+$("bankBox").addEventListener("click", function(e){
+  var el = e.target;
+  if (el.dataset && el.dataset.del){
+    var remain = (LAST.bank.custom||[]).filter(function(w){ return w !== el.dataset.del; });
+    post("/api/custom","words="+encodeURIComponent(remain.join(","))).then(function(){ toast("已删除"); });
+    return;
+  }
+  if (el.dataset && el.dataset.namedel){
+    post("/api/nameword/remove","name="+encodeURIComponent(el.dataset.namedel)).then(function(){ toast("已删除人名"); });
+    return;
+  }
+  if (el.dataset && el.dataset.hellon){
+    post("/api/highfreq/toggle","word="+encodeURIComponent(el.dataset.hellon)+"&on=0").then(function(){ toast("已停用"); });
+    return;
+  }
+  if (el.dataset && el.dataset.helloff){
+    post("/api/highfreq/toggle","word="+encodeURIComponent(el.dataset.helloff)+"&on=1").then(function(){ toast("已启用"); });
+    return;
+  }
+  if (el.dataset && el.dataset.nameon){
+    post("/api/nameword/toggle","name="+encodeURIComponent(el.dataset.nameon)+"&on=0").then(function(){ toast("已停用"); });
+    return;
+  }
+  if (el.dataset && el.dataset.nameoff){
+    post("/api/nameword/toggle","name="+encodeURIComponent(el.dataset.nameoff)+"&on=1").then(function(){ toast("已启用"); });
+    return;
+  }
+  if (el.dataset && el.dataset.bank){
+    var b = $("nextBox");
+    b.value = (b.value.trim() ? b.value.trim()+" " : "") + el.dataset.bank;
+    post("/api/next","words="+encodeURIComponent(b.value));
+  }
+});
+
+document.querySelectorAll(".tabs button").forEach(function(b){
+  b.onclick = function(){
+    document.querySelectorAll(".tabs button").forEach(function(x){ x.classList.remove("on"); });
+    b.classList.add("on"); TAB = b.dataset.tab;
+    if (LAST) renderBank(LAST);
+  };
+});
+
+$("btnSim").onclick = function(){
+  var t = $("simText").value.trim();
+  if (!t){ toast("先写一句"); return; }
+  post("/api/simulate","text="+encodeURIComponent(t)).then(function(j){
+    if (!j) return;
+    $("simResult").innerHTML = j.hit
+      ? '<span class="ok">会死</span> —— 命中「'+esc(j.word)+'」（'+esc(j.kind)+'）'
+      : '<span class="no">不会死</span> —— 这一轮没有命中任何词';
+  });
+};
+
+poll();
+</script>
+</body>
+</html>
