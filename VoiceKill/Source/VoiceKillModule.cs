@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -44,6 +45,7 @@ public class VoiceKillModule : EverestModule
     private string _micProblem = "";
     private int _actualPort;
     private string _fatal = "";
+    private static bool _zipInstall;
 
     private readonly object _lock = new object();
     private List<DangerWord> _round = new List<DangerWord>();
@@ -132,9 +134,21 @@ public class VoiceKillModule : EverestModule
             catch { }
         }
 
+        string arch = "";
+        try { arch = Instance?.Metadata?.PathArchive ?? ""; } catch { }
+
+        if (arch.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+        {
+            Logger.Log(LogLevel.Error, Tag,
+                "这个 Mod 是以 **zip 方式** 安装的（" + arch + "）。" +
+                "原生识别库必须从真实文件加载，zip 里读不到 —— 请把 zip 解压成文件夹 Mods\\VoiceKill\\ 再启动。");
+            _zipInstall = true;
+            return "";
+        }
+
         Logger.Log(LogLevel.Error, Tag,
             "找不到 bin 目录。试过：PathDirectory='" + (Instance?.Metadata?.PathDirectory ?? "") +
-            "'，Assembly='" + SafeLocation() + "'，以及 Mods 目录扫描。");
+            "'，Archive='" + arch + "'，Assembly='" + SafeLocation() + "'，以及 Mods 目录扫描。");
         return "";
     }
 
@@ -178,7 +192,9 @@ public class VoiceKillModule : EverestModule
         if (!NativeBootstrap.EnsureLoaded(_binDir, out string error))
         {
             _startFailed = true;
-            _fatal = "原生库加载失败：" + error;
+            _fatal = _zipInstall
+                ? "识别库加载失败：看起来是直接把 zip 丢进 Mods 了。请把 zip 解压成文件夹 Mods\\VoiceKill\\，再重启游戏。"
+                : "原生库加载失败：" + error;
             Logger.Log(LogLevel.Error, Tag,
                 "原生库准备失败: " + error + " —— 本次不启用，游戏不会崩。");
             return;
@@ -1422,22 +1438,74 @@ public class VoiceKillModule : EverestModule
         }
     }
 
+    /// <summary>
+    /// 本机内网 IP，按「能不能用」排序。
+    ///
+    /// 2026-10-24 一个用户的面板让人填 169.254.142.67 —— 那是「没拿到 DHCP」时的自动地址，
+    /// 别人根本连不上；同一台机器上还有 192.168.56.1 这种 VirtualBox 虚拟网卡。
+    /// 所以这里改成打分：有默认网关的优先，虚拟网卡扣分，169.254 基本等于没网。
+    /// </summary>
     public static List<string> LocalIPs()
     {
-        var list = new List<string>();
+        var cand = new List<KeyValuePair<string, int>>();
         try
         {
-            foreach (IPAddress ip in Dns.GetHostAddresses(Dns.GetHostName()))
+            foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
             {
-                if (ip.AddressFamily != AddressFamily.InterNetwork) continue;
-                if (IPAddress.IsLoopback(ip)) continue;
-                // 只收内网地址：公网 IP 不该出现在面板上（有用户的机器直接是公网 IP）
-                if (!IsPrivateV4(ip)) continue;
-                list.Add(ip.ToString());
+                if (ni.OperationalStatus != OperationalStatus.Up) continue;
+                if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                if (ni.NetworkInterfaceType == NetworkInterfaceType.Tunnel) continue;
+
+                IPInterfaceProperties props;
+                try { props = ni.GetIPProperties(); } catch { continue; }
+
+                bool hasGateway = false;
+                try
+                {
+                    foreach (GatewayIPAddressInformation gw in props.GatewayAddresses)
+                    {
+                        if (gw.Address != null && !gw.Address.Equals(IPAddress.Any)) { hasGateway = true; break; }
+                    }
+                }
+                catch { }
+
+                string name = ((ni.Name ?? "") + " " + (ni.Description ?? "")).ToLowerInvariant();
+                int baseScore = hasGateway ? 40 : 0;
+                if (name.Contains("virtualbox") || name.Contains("vmware") || name.Contains("hyper-v") ||
+                    name.Contains("vethernet") || name.Contains("tailscale") || name.Contains("zerotier") ||
+                    name.Contains("wintun") || name.Contains("tap-"))
+                    baseScore -= 30;
+
+                try
+                {
+                    foreach (UnicastIPAddressInformation ua in props.UnicastAddresses)
+                    {
+                        IPAddress ip = ua.Address;
+                        if (ip.AddressFamily != AddressFamily.InterNetwork) continue;
+                        if (IPAddress.IsLoopback(ip)) continue;
+
+                        byte[] b = ip.GetAddressBytes();
+                        int score = baseScore;
+                        if (b[0] == 192 && b[1] == 168) score += 25;
+                        else if (b[0] == 10) score += 20;
+                        else if (b[0] == 172 && b[1] >= 16 && b[1] <= 31) score += 15;
+                        else if (b[0] == 169 && b[1] == 254) score -= 50;   // APIPA：等于没网
+                        else score -= 40;                                    // 公网 IP，不该显示
+
+                        Logger.Log(LogLevel.Debug, "VoiceKill", $"网卡 [{ni.Name}] {ip} 网关={hasGateway} 得分={score}");
+                        cand.Add(new KeyValuePair<string, int>(ip.ToString(), score));
+                    }
+                }
+                catch { }
             }
         }
         catch { }
-        return list;
+
+        return cand.Where(c => c.Value >= 0)
+                   .OrderByDescending(c => c.Value)
+                   .Select(c => c.Key)
+                   .Distinct()
+                   .ToList();
     }
 
     private static string FirstLocalIP()

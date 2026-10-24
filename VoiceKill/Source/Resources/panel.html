@@ -326,7 +326,12 @@ function applyLayout(st){
   var mh = $("modeHint");
   if (mode === 0) mh.innerHTML = "单人模式：只认你自己的声音，词每 " + st.roundSeconds + " 秒换一组。"
       + "<br><span style=\"color:#8b98a8\">想一起玩请选「我开房」—— 注意联机要求两台电脑能互相访问（同 WiFi 或先组虚拟局域网）。</span>";
-  if (mode === 1) mh.innerHTML = "你是主机。别人在「加入别人的房」里填你的内网 IP（<b>" + esc((st.localIps||[])[0]||"本机IP")
+  if (mode === 1 && !(st.localIps||[]).length){
+    mh.innerHTML = "<b style=\"color:#ff9b9b\">没检测到可用的内网 IP。</b>"
+      + "说明这台机器现在没连上任何局域网（或者只有虚拟网卡/没拿到地址）。"
+      + "先把 WiFi / 网线 / 虚拟局域网连好，再回来看这里。";
+  }
+  else if (mode === 1) mh.innerHTML = "你是主机。别人在「加入别人的房」里填你的内网 IP（<b>" + esc((st.localIps||[])[0]||"本机IP")
       + "</b>）和口令（<b>" + esc(st.roomKey) + "</b>）。跨地区需要先组虚拟局域网（见下方说明）。"
       + (st.lanOpen
           ? '<br><span style="color:#8b98a8">端口 ' + st.port + ' 已对局域网开放（只在开房时开；切回单人会关掉）</span>'
