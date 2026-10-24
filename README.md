@@ -4,7 +4,7 @@
 
 ![License](https://img.shields.io/github/license/L-FLA5H/VoiceKill-Celeste?label=%E5%8D%8F%E8%AE%AE)
 
-> 「说到危险词就当直接趋势」的蔚蓝整活 mod。
+> 「说到危险词就直接趋势」的蔚蓝整活 mod。
 >
 > 完全本地识别，不联网，不上传音频。
 
