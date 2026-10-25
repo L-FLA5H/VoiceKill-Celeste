@@ -121,11 +121,21 @@
       </div>
     </div>
 
-    <div class="step" id="joinRow" style="display:none">
-      <span class="num">3</span><b id="joinTitle">填主机的 IP 和口令</b>
-      <input type="text" id="hostUrl" placeholder="主机的局域网IP，如 192.168.1.10" style="max-width:280px">
-      <input type="text" id="roomKey" placeholder="口令" style="max-width:140px">
+    <div class="step" id="joinRow" style="display:none;flex-wrap:wrap">
+      <span class="num">3</span><b id="joinTitle">填房主的地址和口令</b>
+      <input type="text" id="hostUrl" placeholder="192.168.1.51 或 xxx.frp.one:19747" style="max-width:300px">
+      <input type="text" id="roomKey" placeholder="口令（两边要一样）" style="max-width:170px">
+      <button id="btnTest">测试连接</button>
       <button id="btnJoin">加入</button>
+      <div style="flex-basis:100%;margin-top:8px" class="hint">
+        <b>「地址」填什么？</b> 填<b>你自己能访问到房主电脑的那个地址</b>，三种情况：<br>
+        · 同一个 WiFi → 房主面板上显示的内网 IP，比如 <code>192.168.1.51</code><br>
+        · 用 frp / 内网穿透 → 穿透服务给你的<b>域名:端口</b>，比如 <code>xxx.frp.one:19747</code><br>
+        · 用了 Radmin / Tailscale → 组网工具给你的那个 IP，比如 <code>26.12.34.56</code><br>
+        <span style="color:#8b98a8">端口：没写就自动补 <b>38471</b>；没写就不是默认端口，填 <code>域名:端口</code>。前缀 <code>http://</code> 可加可不加。</span>
+        <div id="urlPreview" style="margin-top:6px;color:#7fd7ff"></div>
+        <div id="testResult" style="margin-top:4px"></div>
+      </div>
     </div>
 
     <div class="hint" id="modeHint">单人模式：只有你自己说话才算，词每 30 秒换一组。</div>
@@ -345,7 +355,14 @@ function applyLayout(st){
         ? "主机中 · 口令 <b>"+esc(st.roomKey)+"</b> · 本机 IP <b>"+esc((st.localIps||[])[0]||"?")+"</b>"
         : (st.roomConnected
             ? "已连上主机 · 口令 <b>"+esc(st.roomKey)+"</b>"
-            : "还没连上 —— ① 主机选了「我开房」吗 ② IP 对不对 ③ 主机防火墙放行了吗"
+              + (st.hostFull ? '<br><span style="color:#8b98a8">来自 ' + esc(st.hostFull) + '</span>' : "")
+              + (st.peerOld
+                  ? '<br><span style="color:#ffd27a">房主用的是旧版本 —— 词可能会粘成一坨。让房主更新到最新版。</span>'
+                  : "")
+              + (st.protocolWarn
+                  ? '<br><span style="color:#ff9b9b">' + esc(st.protocolWarn) + '（通常是两边版本不一致）</span>'
+                  : "")
+            : "还没连上 —— ① 主机选了「我开房」吗 ② 地址对不对（用「测试连接」试一下） ③ 主机防火墙放行了吗"
               + (st.roomError ? '<br><span style="color:#ff9b9b">错误：' + esc(st.roomError) + '</span>' : "")));
 }
 
@@ -440,7 +457,7 @@ function poll(){
     }
     if (document.activeElement !== $("srcSel")) $("srcSel").value = String(st.source||0);
     if (document.activeElement !== $("scopeSel")) $("scopeSel").value = String(st.deathScope||0);
-    if (document.activeElement !== $("hostUrl")) $("hostUrl").value = st.hostUrl || "";
+    if (document.activeElement !== $("hostUrl")) { $("hostUrl").value = st.hostUrl || ""; previewUrl(); }
     if (document.activeElement !== $("roomKey")) $("roomKey").value = st.roomKey || "";
     $("cSync").checked = !!st.offlineSync;
     $("cOnlyHost").checked = st.onlyHost !== false;
@@ -504,11 +521,43 @@ $("cOnlyHost").onchange = function(){
 $("cSync").onchange = function(){
   post("/api/sync","on="+($("cSync").checked?1:0)).then(function(){ toast($("cSync").checked?"离线同步已开":"离线同步已关"); });
 };
+function previewUrl(){
+  var h = $("hostUrl").value.trim();
+  var port = (LAST && LAST.port) ? LAST.port : 38471;
+  if (!h){ $("urlPreview").textContent = ""; return; }
+  var t = h.replace(/^https?:\/\//i, "").split(/[\/?#]/)[0];
+  var hasPort = /:\d+$/.test(t);
+  $("urlPreview").textContent = "将连接： http://" + t + (hasPort ? "" : ":" + port);
+}
+$("hostUrl").addEventListener("input", function(){
+  previewUrl();
+  $("testResult").textContent = "";
+});
+
+$("btnTest").onclick = function(){
+  var h = $("hostUrl").value.trim();
+  if (!h){ toast("先填房主地址"); return; }
+  $("testResult").innerHTML = '<span style="color:#8b98a8">正在连…</span>';
+  post("/api/room/test","host="+encodeURIComponent(h)+"&key="+encodeURIComponent($("roomKey").value))
+    .then(function(j){
+      if (!j) { $("testResult").innerHTML = '<span style="color:#ff9b9b">没反应，面板服务可能异常</span>'; return; }
+      if (j.ok) {
+        $("testResult").innerHTML = '<span style="color:#5fe08a">✓ 连上了 —— ' + esc(j.url||"") + '，可以直接点「加入」</span>';
+      } else {
+        $("testResult").innerHTML = '<span style="color:#ff9b9b">✗ ' + esc(j.error||"连不上") + '</span>'
+          + (j.url ? '<br><span style="color:#8b98a8">试的是 ' + esc(j.url) + '</span>' : "");
+      }
+    });
+};
+
 $("btnJoin").onclick = function(){
   var h = $("hostUrl").value.trim();
-  if (!h){ toast("先填主机 IP"); return; }
+  if (!h){ toast("先填房主地址"); return; }
   post("/api/room/join","host="+encodeURIComponent(h)+"&key="+encodeURIComponent($("roomKey").value))
-    .then(function(j){ if (j&&j.ok) toast("加入中…"); });
+    .then(function(j){
+      if (j && j.ok) toast("加入中…");
+      else if (j && j.error) toast(j.error);
+    });
 };
 $("btnLeave").onclick = function(){ post("/api/room/leave").then(function(){ toast("已回到单人"); }); };
 

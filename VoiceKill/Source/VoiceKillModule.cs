@@ -43,6 +43,7 @@ public class VoiceKillModule : EverestModule
     private volatile bool _rotateRequested;
     private volatile bool _configDirty;
     private string _micProblem = "";
+    private Level _tickLevel;
     private int _actualPort;
     private string _fatal = "";
     private static bool _zipInstall;
@@ -129,6 +130,14 @@ public class VoiceKillModule : EverestModule
                 {
                     string bin = Path.Combine(dir, "bin");
                     if (File.Exists(Path.Combine(bin, "VoiceKill.dll"))) return bin;
+
+                    // 多套了一层（解压进已经存在的 VoiceKill 文件夹，变成
+                    // Mods\\VoiceKill\\VoiceKill\\bin）也要能认出来
+                    foreach (string sub in Directory.GetDirectories(dir))
+                    {
+                        string bin2 = Path.Combine(sub, "bin");
+                        if (File.Exists(Path.Combine(bin2, "VoiceKill.dll"))) return bin2;
+                    }
                 }
             }
             catch { }
@@ -422,6 +431,16 @@ public class VoiceKillModule : EverestModule
 
     private void Tick(Level level)
     {
+        // 换关、读档（SpeedrunTool 保存状态）都会换一个 Level 实例。
+        // 这时客机必须马上重新拉一次词，否则要空等到房主下次换词（最长 30 秒），
+        // 期间画面上是旧词、甚至一个词都没有 —— 实测被当成「词不同步」报上来过。
+        if (!ReferenceEquals(_tickLevel, level))
+        {
+            _tickLevel = level;
+            RoomSync room0 = _room;
+            if (room0 != null && Cfg.RoomMode == RoomRole.客户端) room0.ForceResync();
+        }
+
         if (!Cfg.Enabled)
         {
             if (_runtime != null) StopAll();
@@ -644,6 +663,7 @@ public class VoiceKillModule : EverestModule
         room.Start();
 
         _room = room;
+        if (Cfg.RoomMode == RoomRole.客户端) room.ForceResync();   // 换关/读档后别空等 30 秒
         RebindServerSoon();
         Logger.Log(LogLevel.Info, Tag,
             Cfg.RoomMode == RoomRole.主机
@@ -651,15 +671,44 @@ public class VoiceKillModule : EverestModule
                 : "房间模式: 客户端 → " + Cfg.RoomHostUrl);
     }
 
-    /// <summary>把 "192.168.1.10" / "192.168.1.10:38471" 补成完整 URL。</summary>
+    /// <summary>
+    /// 把用户填的东西归一成 http://host:port。
+    ///
+    /// 实测用户会填：`192.168.1.51`、`192.168.1.51:38471`、`frp-cat.com`、
+    /// `frp-cat.com:19747`、`http://frp-cat.com:19747/`，甚至有人把 frp 教程里的
+    /// 配置片段整段贴进来。所以这里尽量吃掉噪音：去协议头、去路径/查询、去结尾斜杠，
+    /// 没写端口就补默认端口 —— 用户不该为「要不要带端口」困惑。
+    /// </summary>
     private string NormalizeHost(string raw)
     {
-        string s = (raw ?? "").Trim();
+        string s = (raw ?? "").Trim().Replace(" ", "");
         if (s.Length == 0) return "";
-        if (!s.StartsWith("http", StringComparison.OrdinalIgnoreCase)) s = "http://" + s;
-        int schemeEnd = s.IndexOf("://", StringComparison.Ordinal) + 3;
-        if (s.IndexOf(':', schemeEnd) < 0) s += ":" + Cfg.WebPort;
-        return s.TrimEnd('/');
+
+        int scheme = s.IndexOf("://", StringComparison.Ordinal);
+        if (scheme >= 0) s = s.Substring(scheme + 3);
+        else if (s.StartsWith("http", StringComparison.OrdinalIgnoreCase)) s = s.Substring(4);
+
+        int cut = s.IndexOfAny(new[] { '/', '?', '#', '\\' });
+        if (cut >= 0) s = s.Substring(0, cut);
+
+        s = s.TrimEnd('.', ':');
+        if (s.Length == 0) return "";
+
+        bool hasPort = false;
+        int colon = s.LastIndexOf(':');
+        if (colon > 0 && colon < s.Length - 1)
+        {
+            int parsed;
+            hasPort = int.TryParse(s.Substring(colon + 1), out parsed) && parsed > 0 && parsed <= 65535;
+        }
+
+        return "http://" + s + (hasPort ? "" : ":" + Cfg.WebPort);
+    }
+
+    /// <summary>面板显示用：最终会连到哪里。</summary>
+    private string CurrentHostFull()
+    {
+        try { return NormalizeHost(Cfg.RoomHostUrl); } catch { return ""; }
     }
 
     private void StartMic()
@@ -1049,13 +1098,54 @@ public class VoiceKillModule : EverestModule
             {
                 string host = FormValue(body, "host").Trim();
                 string key = FormValue(body, "key").Trim();
-                if (host.Length == 0) return "{\"ok\":false,\"error\":\"要填主机IP\"}";
+                if (host.Length == 0) return "{\"ok\":false,\"error\":\"要填房主的地址\"}";
+                string url = NormalizeHost(host);
+                if (url.Length <= "http://".Length)
+                    return "{\"ok\":false,\"error\":\"这个地址看不懂，填 IP 或域名，比如 192.168.1.51\"}";
                 if (key.Length > 0) Cfg.RoomKey = key;
-                Cfg.RoomHostUrl = host;
+                Cfg.RoomHostUrl = url;
                 Cfg.RoomMode = RoomRole.客户端;
                 ApplyRoomMode();
                 _configDirty = true;
                 return "{\"ok\":true}";
+            }
+
+            case "/api/room/test":
+            {
+                // 面板上的「测试连接」：由服务端亲自连一次，把真实原因带回来，
+                // 用户不用再猜「是我填错了，还是对面没开房」。
+                string url = NormalizeHost(FormValue(body, "host"));
+                if (url.Length <= "http://".Length)
+                    return "{\"ok\":false,\"error\":\"地址看不懂\"}";
+
+                string key = FormValue(body, "key");
+                if (key.Length == 0) key = Cfg.RoomKey;
+
+                var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+                try { http.DefaultRequestHeaders.ConnectionClose = true; } catch { }
+
+                try
+                {
+                    string json = http.GetStringAsync(url + "/api/room?key=" + Uri.EscapeDataString(key ?? ""))
+                        .GetAwaiter().GetResult();
+
+                    int ki = json.IndexOf("\"key\":\"", StringComparison.Ordinal);
+                    if (ki < 0)
+                        return "{\"ok\":false,\"url\":\"" + Esc(url) + "\",\"error\":\"能连上，但对面不像 VoiceKill 主机\"}";
+
+                    int end = json.IndexOf('"', ki + 7);
+                    string hostKey = end > ki ? json.Substring(ki + 7, end - ki - 7) : "";
+
+                    if (hostKey.Length > 0 && hostKey != (key ?? ""))
+                        return "{\"ok\":false,\"url\":\"" + Esc(url) + "\",\"error\":\"连上了，但口令不一样（对面的是 " + Esc(hostKey) + "）\"}";
+
+                    return "{\"ok\":true,\"url\":\"" + Esc(url) + "\"}";
+                }
+                catch (Exception ex)
+                {
+                    return "{\"ok\":false,\"url\":\"" + Esc(url) + "\",\"error\":\"" + Esc(FriendlyNetError(ex)) + "\"}";
+                }
+                finally { http.Dispose(); }
             }
 
             case "/api/room/host":
@@ -1228,6 +1318,9 @@ public class VoiceKillModule : EverestModule
             sb.Append(",\"speaker\":\"").Append(Esc(Speaker())).Append('"');
             sb.Append(",\"source\":").Append((int)Cfg.AudioSource);
             sb.Append(",\"roomError\":\"").Append(Esc(_room?.LastError ?? "")).Append('"');
+            sb.Append(",\"peerOld\":").Append(_room != null && _room.PeerOutdated ? "true" : "false");
+            sb.Append(",\"protocolWarn\":\"").Append(Esc(_room?.ProtocolWarn ?? "")).Append('"');
+            sb.Append(",\"hostFull\":\"").Append(Esc(CurrentHostFull())).Append('"');
             sb.Append(",\"lanOpen\":").Append(_server != null && _server.IsLan ? "true" : "false");
             sb.Append(",\"onlyHost\":").Append(Cfg.OnlyHostCanEdit ? "true" : "false");
             sb.Append(",\"offlineSync\":").Append(Cfg.OfflineSync ? "true" : "false");
@@ -1374,6 +1467,27 @@ public class VoiceKillModule : EverestModule
     private string FirstName() => Speaker();
 
     // ---------------- 小工具 ----------------
+
+    /// <summary>把网络异常翻译成用户看得懂的话。</summary>
+    private static string FriendlyNetError(Exception ex)
+    {
+        Exception e = ex;
+        while (e.InnerException != null) e = e.InnerException;
+
+        string m = e.Message ?? "";
+        if (e is TaskCanceledException || m.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
+            m.Contains("超时", StringComparison.Ordinal))
+            return "连接超时 —— 对面没开房、地址不对，或者防火墙拦了";
+        if (m.Contains("refused", StringComparison.OrdinalIgnoreCase) ||
+            m.Contains("积极拒绝", StringComparison.Ordinal))
+            return "对方拒绝了连接 —— 端口不对，或者房主没点「我开房」";
+        if (m.Contains("No such host", StringComparison.OrdinalIgnoreCase) ||
+            m.Contains("not known", StringComparison.OrdinalIgnoreCase))
+            return "找不到这个地址 —— 域名打错，或者这个域名只在你自己的机器上有效";
+        if (m.Contains("SSL", StringComparison.OrdinalIgnoreCase))
+            return "对面是 https，本 mod 只走 http —— 地址前别加 https";
+        return e.GetType().Name + ": " + m;
+    }
 
     /// <summary>给备用设置子菜单用的公开保存入口。</summary>
     public static void SaveCfgPublic() => SaveCfg();
