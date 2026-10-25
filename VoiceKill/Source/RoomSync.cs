@@ -15,6 +15,8 @@ public sealed class RoomDeath
     public long Seq;
     public string Name = "";
     public string Word = "";
+    /// <summary>谁报的（客户端的随机 id）。用来避免「自己的死亡回声」把自己再杀一次。</summary>
+    public string Origin = "";
 }
 
 /// <summary>
@@ -67,6 +69,12 @@ public sealed class RoomSync : IDisposable
 
     /// <summary>最后一次连接失败的原因（面板要显示，否则用户只看到「正在连接」）。</summary>
     public volatile string LastError = "";
+
+    /// <summary>本机客户端 id：随死亡一起报给主机，主机再广播出来，自己就认得是自己的死亡。</summary>
+    public readonly string ClientId = Guid.NewGuid().ToString("N").Substring(0, 10);
+
+    /// <summary>主机当前设定的踩雷范围（-1 = 还不知道）。客机以主机的为准。</summary>
+    public volatile int HostScopeRaw = -1;
 
     /// <summary>对方是不带词数的老版本（0.9.5 及以前）。</summary>
     public volatile bool PeerOutdated;
@@ -157,11 +165,20 @@ public sealed class RoomSync : IDisposable
     }
 
     public void HostAddDeath(string name, string word)
+        => HostAddDeath(name, word, "");
+
+    public void HostAddDeath(string name, string word, string origin)
     {
         lock (_lock)
         {
             _deathSeq++;
-            _deaths.Add(new RoomDeath { Seq = _deathSeq, Name = name ?? "", Word = word ?? "" });
+            _deaths.Add(new RoomDeath
+            {
+                Seq = _deathSeq,
+                Name = name ?? "",
+                Word = word ?? "",
+                Origin = origin ?? ""
+            });
             while (_deaths.Count > 100) _deaths.RemoveAt(0);
         }
     }
@@ -180,7 +197,8 @@ public sealed class RoomSync : IDisposable
                 first = false;
                 sb.Append("{\"seq\":").Append(d.Seq)
                   .Append(",\"name\":\"").Append(Escape(d.Name))
-                  .Append("\",\"word\":\"").Append(Escape(d.Word)).Append("\"}");
+                  .Append("\",\"word\":\"").Append(Escape(d.Word))
+                  .Append("\",\"o\":\"").Append(Escape(d.Origin)).Append("\"}");
             }
         }
         return sb.Append("]}").ToString();
@@ -248,11 +266,29 @@ public sealed class RoomSync : IDisposable
             }
 
             if (list.Count > 0) OnRemoteRound?.Invoke(list);
+
+            // 踩雷范围以主机为准：主机设「全员连坐」就所有人都连坐，
+            // 不再由每个客户端自己在面板上设（以前就是这么散的，导致有人不连坐）
+            string scope = ReadStr(round, "\"scope\":\"");
+            if (scope == "全员连坐") HostScopeRaw = 1;
+            else if (scope == "只死自己") HostScopeRaw = 0;
         }
 
         string deaths = _http.GetStringAsync(Base + "/api/room/deaths?since=" + _seenDeathSeq + "&key=" + k)
             .GetAwaiter().GetResult();
+        ApplyDeaths(deaths);
+    }
+
+    /// <summary>
+    /// 处理主机广播的死亡列表。抽成独立方法是为了能单独验证
+    /// 「自己的死亡回声不能再杀自己」和「按主机的踩雷范围决定」这两条规则。
+    /// </summary>
+    private void ApplyDeaths(string deaths)
+    {
+        if (string.IsNullOrEmpty(deaths)) return;
+
         long last = ReadLong(deaths, "\"last\":");
+        if (last < _seenDeathSeq) _seenDeathSeq = 0;   // 主机重启过，序号归零了
         if (last <= _seenDeathSeq) return;
 
         int idx = 0;
@@ -263,9 +299,18 @@ public sealed class RoomSync : IDisposable
             string name = ReadAt(deaths, at + "\"name\":\"".Length);
             int wat = deaths.IndexOf("\"word\":\"", at, StringComparison.Ordinal);
             string word = wat >= 0 ? ReadAt(deaths, wat + "\"word\":\"".Length) : "";
+
+            int oat = deaths.IndexOf("\"o\":\"", at, StringComparison.Ordinal);
+            string origin = oat >= 0 ? ReadAt(deaths, oat + "\"o\":\"".Length) : "";
+
             idx = at + 8;
 
-            if (Scope == DeathScope.全员连坐) OnRemoteDeath?.Invoke(name + "|" + word);
+            // 自己报上去的死亡会被主机广播回来，认出来就跳过，
+            // 否则「我死了 → 报给主机 → 主机广播 → 我又死一次」。
+            if (origin.Length > 0 && origin == ClientId) continue;
+
+            int scope = HostScopeRaw >= 0 ? HostScopeRaw : (int)Scope;
+            if (scope == (int)DeathScope.全员连坐) OnRemoteDeath?.Invoke(name + "|" + word);
         }
 
         _seenDeathSeq = last;
@@ -292,7 +337,8 @@ public sealed class RoomSync : IDisposable
         {
             var content = new StringContent("name=" + Uri.EscapeDataString(name ?? "") +
                                             "&word=" + Uri.EscapeDataString(word ?? "") +
-                                            "&key=" + Uri.EscapeDataString(Key ?? ""),
+                                            "&key=" + Uri.EscapeDataString(Key ?? "") +
+                                            "&origin=" + Uri.EscapeDataString(ClientId),
                 Encoding.UTF8, "application/x-www-form-urlencoded");
             _http.PostAsync(Base + "/api/room/death", content).GetAwaiter().GetResult();
         }

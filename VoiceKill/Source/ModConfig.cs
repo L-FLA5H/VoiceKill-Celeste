@@ -30,6 +30,12 @@ public sealed class ModConfig
     public int SmartPickPercent = 60;
     /// <summary>每轮最多塞几个「智能选词」（你说的词）。0 = 一开就不塞。</summary>
     public int SmartPerRound = 2;
+    /// <summary>每轮塞几个人名（从「人名危险词」里抽）。0 = 不塞。</summary>
+    public int NamesPerRound = 1;
+    /// <summary>每轮塞几个游戏词（口语 / 正式 / 自定义）。0 = 只在补满时随机撞上。</summary>
+    public int GamePerRound = 0;
+    /// <summary>「游戏词个数」这项是 0.9.7 才加的，老配置迁移用。</summary>
+    public bool GameQuotaMigrated = false;
     public string SpeakerName = "";
     public bool ShowInGameHud = true;
     public int HudScalePercent = 100;
@@ -134,6 +140,9 @@ public sealed class ModConfig
         Add("RoundSeconds", RoundSeconds);
         Add("SmartPickPercent", SmartPickPercent);
         Add("SmartPerRound", SmartPerRound);
+        Add("NamesPerRound", NamesPerRound);
+        Add("GamePerRound", GamePerRound);
+        Add("GameQuotaMigrated", GameQuotaMigrated ? "1" : "0");
         Add("SpeakerName", SpeakerName);
         Add("ShowInGameHud", ShowInGameHud ? "1" : "0");
         Add("HudScalePercent", HudScalePercent);
@@ -171,6 +180,9 @@ public sealed class ModConfig
             case "RoundSeconds": RoundSeconds = Int(v, RoundSeconds); break;
             case "SmartPickPercent": SmartPickPercent = Int(v, SmartPickPercent); break;
             case "SmartPerRound": SmartPerRound = Int(v, SmartPerRound); break;
+            case "NamesPerRound": NamesPerRound = Int(v, NamesPerRound); break;
+            case "GamePerRound": GamePerRound = Int(v, GamePerRound); break;
+            case "GameQuotaMigrated": GameQuotaMigrated = Bool(v, GameQuotaMigrated); break;
             case "SpeakerName": SpeakerName = v; break;
             case "ShowInGameHud": ShowInGameHud = Bool(v, ShowInGameHud); break;
             case "HudScalePercent": HudScalePercent = Int(v, HudScalePercent); break;

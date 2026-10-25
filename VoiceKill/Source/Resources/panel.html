@@ -159,6 +159,7 @@
         <option value="1">全员连坐</option>
       </select>
       <button class="ghost" id="btnScope">应用</button>
+      <span class="meta" id="scopeHint" style="flex:1"></span>
     </div>
 
     <div class="row" style="margin-bottom:8px">
@@ -213,11 +214,14 @@
   <!-- 选词设置 -->
   <section class="card">
     <h2>选词设置</h2>
-    <div class="slider"><label>每轮几个词</label><input type="range" id="sWords" min="1" max="20"><b id="vWords"></b></div>
+    <div class="slider"><label>本轮总共</label><b id="vWords" style="min-width:auto"></b></div>
     <div class="slider"><label>高频地狱词</label><input type="range" id="sHell" min="0" max="10"><b id="vHell"></b></div>
     <div class="slider"><label>轮换间隔</label><input type="range" id="sRound" min="5" max="120" step="5"><b id="vRound"></b></div>
     <div class="slider"><label>智能概率</label><input type="range" id="sSmart" min="0" max="100" step="5"><b id="vSmart"></b></div>
     <div class="slider"><label>智能词个数</label><input type="range" id="sSmartCount" min="0" max="8"><b id="vSmartCount"></b></div>
+    <div class="slider"><label>人名个数</label><input type="range" id="sNamesCount" min="0" max="6"><b id="vNamesCount"></b></div>
+    <div class="slider"><label>游戏词个数</label><input type="range" id="sGameCount" min="0" max="20"><b id="vGameCount"></b></div>
+    <div class="hint" id="quotaHint" style="margin:-2px 0 6px"></div>
     <div class="slider"><label>禁词大小</label><input type="range" id="sHud" min="40" max="100" step="5"><b id="vHud"></b></div>
     <div class="row" style="margin-top:8px">
       <label class="meta"><input type="checkbox" id="cHud"> 游戏里显示禁词</label>
@@ -456,7 +460,15 @@ function poll(){
       sel.value = String(st.micIndex||0);
     }
     if (document.activeElement !== $("srcSel")) $("srcSel").value = String(st.source||0);
-    if (document.activeElement !== $("scopeSel")) $("scopeSel").value = String(st.deathScope||0);
+    // 客机的踩雷范围由主机决定，这里只显示、不能改 —— 以前各设各的，才会「连坐不了」
+    var isClient = (st.roomMode === 2);
+    if (document.activeElement !== $("scopeSel"))
+      $("scopeSel").value = String(isClient ? (st.hostScope == null ? 0 : st.hostScope) : (st.deathScope||0));
+    $("scopeSel").disabled = isClient;
+    $("btnScope").disabled = isClient;
+    $("scopeHint").innerHTML = isClient
+      ? '<span style="color:#8b98a8">由主机决定' + (st.roomConnected ? "" : "（还没连上，先按本机设置）") + '</span>'
+      : '<span style="color:#8b98a8">主机踩雷 / 客机踩雷，双方都会一起死</span>';
     if (document.activeElement !== $("hostUrl")) { $("hostUrl").value = st.hostUrl || ""; previewUrl(); }
     if (document.activeElement !== $("roomKey")) $("roomKey").value = st.roomKey || "";
     $("cSync").checked = !!st.offlineSync;
@@ -464,10 +476,12 @@ function poll(){
 
     if (!INITED){
       INITED = true;
-      $("sWords").value = st.wordsPerRound; $("sHell").value = st.highFreqPerRound;
+      $("sHell").value = st.highFreqPerRound;
       $("sRound").value = st.roundSeconds; $("sSmart").value = st.smartPick;
       $("sHud").value = st.hudScale; $("cHud").checked = !!st.showHud;
       $("sSmartCount").value = st.smartPerRound == null ? 2 : st.smartPerRound;
+      $("sNamesCount").value = st.namesPerRound == null ? 1 : st.namesPerRound;
+      $("sGameCount").value = st.gamePerRound == null ? 0 : st.gamePerRound;
       labels();
     }
     if (!TYPING_NEXT) $("nextBox").value = (st.nextWords||[]).join(" ");
@@ -486,11 +500,20 @@ function poll(){
 }
 
 function labels(){
-  $("vWords").textContent = $("sWords").value + " 个";
+  var nName = Number($("sNamesCount").value), nHell = Number($("sHell").value);
+  var nSmart = Number($("sSmartCount").value), nGame = Number($("sGameCount").value);
+  var total = nName + nHell + nSmart + nGame;
+  $("vWords").textContent = total + " 个";
   $("vHell").textContent  = $("sHell").value + " 个";
   $("vRound").textContent = $("sRound").value + "s";
   $("vSmart").textContent = $("sSmart").value + "%";
   $("vSmartCount").textContent = $("sSmartCount").value + " 个";
+  $("vNamesCount").textContent = $("sNamesCount").value + " 个";
+  $("vGameCount").textContent = $("sGameCount").value + " 个";
+
+  $("quotaHint").innerHTML = '<span style="color:#8b98a8">本轮 ' + total + ' 个 = 人名 ' + nName +
+    ' + 高频 ' + nHell + ' + 智能 ' + nSmart + ' + 游戏词 ' + nGame +
+    '（面板上临时指定「下一轮」的词会另外加上）</span>';
   $("vHud").textContent   = $("sHud").value + "%";
 }
 
@@ -561,19 +584,21 @@ $("btnJoin").onclick = function(){
 };
 $("btnLeave").onclick = function(){ post("/api/room/leave").then(function(){ toast("已回到单人"); }); };
 
-["sWords","sHell","sRound","sSmart","sSmartCount","sHud"].forEach(function(id){
+["sHell","sRound","sSmart","sSmartCount","sNamesCount","sGameCount","sHud"].forEach(function(id){
   var el = $(id);
   el.addEventListener("input", labels);
 });
 
-["sWords","sHell","sRound","sSmart","sSmartCount","sHud"].forEach(function(id){
+["sHell","sRound","sSmart","sSmartCount","sNamesCount","sGameCount","sHud"].forEach(function(id){
   $(id).addEventListener("change", function(){
     labels();
-    post("/api/config", ["wordsPerRound="+$("sWords").value,
+    post("/api/config", [
       "highFreqPerRound="+$("sHell").value,
       "roundSeconds="+$("sRound").value,
       "smartPick="+$("sSmart").value,
       "smartPerRound="+$("sSmartCount").value,
+      "namesPerRound="+$("sNamesCount").value,
+      "gamePerRound="+$("sGameCount").value,
       "hudScale="+$("sHud").value].join("&"));
   });
 });

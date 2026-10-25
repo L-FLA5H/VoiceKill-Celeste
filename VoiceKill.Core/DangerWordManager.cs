@@ -9,8 +9,11 @@ public sealed class DangerWordConfig
     /// <summary>一轮凑几个词。实测 5~20，太少没压迫感，太多全是废词。</summary>
     public int WordsPerRound = 8;
 
-    /// <summary>每轮固定塞几个人名。</summary>
+    /// <summary>每轮固定塞几个人名（0 = 不塞）。</summary>
     public int NamesPerRound = 1;
+
+    /// <summary>每轮固定塞几个「游戏词」（口语 / 正式 / 自定义词库）。</summary>
+    public int GamePerRound = 0;
 
     /// <summary>每轮固定塞几个高频地狱词。实测 6~12 才够刺激，起步给 3。</summary>
     public int HighFreqPerRound = 3;
@@ -149,8 +152,25 @@ public sealed class DangerWordManager
             if (picked.Count > before) hellCount++;
         }
 
-        // 5) 随机词库补满
-        var filler = WordBank.Custom.Concat(WordBank.Casual).Concat(WordBank.Formal)
+        // 5) 游戏词库定额（口语 / 正式 / 自定义）
+        //    以前只能调「高频」和「智能」的个数，游戏词是补满时随机撞上的，
+        //    想要多一点「冲刺 / wavedash」这种就只能靠运气。
+        var gamePool = WordBank.Custom.Concat(WordBank.Casual).Concat(WordBank.Formal)
+            .Where(w => !used.Contains(TextNormalizer.Normalize(w)))
+            .OrderBy(_ => _rng.Next())
+            .ToList();
+
+        int gameCount = 0;
+        foreach (string g in gamePool)
+        {
+            if (gameCount >= _cfg.GamePerRound || picked.Count >= target) break;
+            int before = picked.Count;
+            TryAdd(g, WordSource.Random);
+            if (picked.Count > before) gameCount++;
+        }
+
+        // 6) 随机词库补满
+        var filler = gamePool
             .Where(w => !used.Contains(TextNormalizer.Normalize(w)))
             .OrderBy(_ => _rng.Next())
             .ToList();

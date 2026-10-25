@@ -1,5 +1,5 @@
 - Name: VoiceKill
-  Version: 0.9.6
+  Version: 0.9.7
   Author: L_FLA5H
   DLL: bin/VoiceKill.dll
   Dependencies:

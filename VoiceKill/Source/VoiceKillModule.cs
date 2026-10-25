@@ -235,6 +235,16 @@ public class VoiceKillModule : EverestModule
 
         _modDir = string.IsNullOrEmpty(_binDir) ? "" : Path.GetDirectoryName(_binDir);
         _cfg = ModConfig.Load(_modDir);
+
+        // 0.9.7 之前没有「游戏词个数」，总词数是单独一项。升级时把差额算进游戏词，
+        // 这样老用户的每轮词数不会突然从 12 变成 6。
+        if (!_cfg.GameQuotaMigrated)
+        {
+            int rest = _cfg.WordsPerRound - (_cfg.NamesPerRound + _cfg.HighFreqPerRound + _cfg.SmartPerRound);
+            if (_cfg.GamePerRound <= 0 && rest > 0) _cfg.GamePerRound = rest;
+            _cfg.GameQuotaMigrated = true;
+            SaveCfg();
+        }
         if (!string.IsNullOrEmpty(_modDir))
         {
             string dict = Path.Combine(_modDir, WordBank.FileName);
@@ -294,10 +304,6 @@ public class VoiceKillModule : EverestModule
 
         sub.Add(new TextMenu.SubHeader("出词方式"));
 
-        TextMenu.Slider words = new TextMenu.Slider("每轮词数", i => i + " 个", 1, 20, Cfg.WordsPerRound);
-        words.Change(i => { Cfg.WordsPerRound = i; SaveCfgPublic(); });
-        sub.Add(words);
-
         TextMenu.Slider hell = new TextMenu.Slider("其中高频地狱词", i => i + " 个", 0, 10, Cfg.HighFreqPerRound);
         hell.Change(i => { Cfg.HighFreqPerRound = i; SaveCfgPublic(); });
         sub.Add(hell);
@@ -313,6 +319,14 @@ public class VoiceKillModule : EverestModule
         TextMenu.Slider smartCount = new TextMenu.Slider("智能词个数", i => i + " 个", 0, 8, Cfg.SmartPerRound);
         smartCount.Change(i => { Cfg.SmartPerRound = i; SaveCfgPublic(); });
         sub.Add(smartCount);
+
+        TextMenu.Slider nameCount = new TextMenu.Slider("人名个数", i => i + " 个", 0, 6, Cfg.NamesPerRound);
+        nameCount.Change(i => { Cfg.NamesPerRound = i; SaveCfgPublic(); });
+        sub.Add(nameCount);
+
+        TextMenu.Slider gameCount = new TextMenu.Slider("游戏词个数", i => i + " 个", 0, 20, Cfg.GamePerRound);
+        gameCount.Change(i => { Cfg.GamePerRound = i; SaveCfgPublic(); });
+        sub.Add(gameCount);
 
         sub.Add(new TextMenu.SubHeader("声音"));
 
@@ -536,12 +550,17 @@ public class VoiceKillModule : EverestModule
         opt.Asr.EndpointSilence = 0.35f;
         opt.Asr.MaxUtteranceSeconds = 4f;
         opt.MatchPartials = Cfg.MatchOnTheFly;
-        opt.Words.WordsPerRound = Math.Max(1, Cfg.WordsPerRound);
+        // 每轮总数 = 各项定额之和。以前是「总数 + 几项定额」，两边不一致时
+        // 定额会被悄悄截断，用户调了看不到效果；现在每个滑条都是精确数量。
+        int quotaSum = Math.Max(0, Cfg.NamesPerRound) + Math.Max(0, Cfg.HighFreqPerRound)
+                     + Math.Max(0, Cfg.SmartPerRound) + Math.Max(0, Cfg.GamePerRound);
+        opt.Words.WordsPerRound = quotaSum > 0 ? quotaSum : Math.Max(1, Cfg.WordsPerRound);
         opt.Words.HighFreqPerRound = Math.Max(0, Cfg.HighFreqPerRound);
         opt.Words.SmartPerRound = Math.Max(0, Cfg.SmartPerRound);
         opt.Words.HighFreqExtra = SplitWords(Cfg.HighFreqExtra);
         opt.Words.HighFreqDisabled = SplitWords(Cfg.HighFreqDisabled);
-        opt.Words.NamesPerRound = 0;   // 默认不塞人名，要用就自己填「玩家名」
+        opt.Words.NamesPerRound = Math.Clamp(Cfg.NamesPerRound, 0, 8);
+        opt.Words.GamePerRound = Math.Clamp(Cfg.GamePerRound, 0, 30);
         opt.Words.SmartPickChance = Cfg.OfflineSync
             ? 0.0   // 离线同步必须关掉智能选词，否则各自听到的话不同，词就不同步了
             : Math.Clamp(Cfg.SmartPickPercent, 0, 100) / 100.0;
@@ -549,7 +568,7 @@ public class VoiceKillModule : EverestModule
         // 客户端只认主机给的词，自己不再按计时器换（否则会闪一下错词）
         opt.ExternalOnly = Cfg.RoomMode == RoomRole.客户端;
         opt.Words.Names = SplitWords(Cfg.Names);
-        if (opt.Words.Names.Count > 0) opt.Words.NamesPerRound = 1;
+        // 人名列表为空时配额自然抽不到，不用额外判断
         opt.RoundSeconds = Cfg.RoundSeconds > 0 ? Cfg.RoundSeconds : 30;
         opt.AllowFuzzy = Cfg.AllowFuzzy;
 
@@ -621,13 +640,18 @@ public class VoiceKillModule : EverestModule
             runtime.OnPlayerDied();
             _pending = verdict;
 
-            RoomSync room = _room;
-            if (room != null)
+            // 因为「队友踩雷」被连坐死的，不再往外报 —— 死亡源头已经广播过了。
+            // 不拦的话：客机被主机连坐死 → 报给主机 → 主机连坐死 → 广播 → 客机再死一次…
+            if (verdict.Via != "room")
             {
-                string who = FirstName();
-                string word = verdict.Word?.Text ?? "";
-                if (room.IsHost) room.HostAddDeath(who, word);
-                else if (room.IsClient) Task.Run(() => room.ReportDeath(who, word));
+                RoomSync room = _room;
+                if (room != null)
+                {
+                    string who = FirstName();
+                    string word = verdict.Word?.Text ?? "";
+                    if (room.IsHost) room.HostAddDeath(who, word);
+                    else if (room.IsClient) Task.Run(() => room.ReportDeath(who, word));
+                }
             }
         };
 
@@ -1229,8 +1253,20 @@ public class VoiceKillModule : EverestModule
             }
 
             case "/api/room/death":
-                _room?.HostAddDeath(FormValue(body, "name"), FormValue(body, "word"));
+            {
+                string who = FormValue(body, "name");
+                string w = FormValue(body, "word");
+                string origin = FormValue(body, "origin");
+
+                _room?.HostAddDeath(who, w, origin);
+
+                // 以前这里只记账，主机自己什么都不做 —— 所以「客机踩雷、主机不连坐」。
+                // 现在：开了全员连坐，且这条死亡确实来自某个客户端，主机也跟着死。
+                if (Cfg.DeathScope == DeathScope.全员连坐 && !string.IsNullOrEmpty(origin))
+                    _remoteKill = true;
+
                 return "{\"ok\":true}";
+            }
         }
         return null;
     }
@@ -1249,6 +1285,8 @@ public class VoiceKillModule : EverestModule
         int hs = ReadInt("hudScale", Cfg.HudScalePercent);
         int sp = ReadInt("smartPick", Cfg.SmartPickPercent);
         int spc = ReadInt("smartPerRound", Cfg.SmartPerRound);
+        int npc = ReadInt("namesPerRound", Cfg.NamesPerRound);
+        int gpc = ReadInt("gamePerRound", Cfg.GamePerRound);
         int sh = ReadInt("showHud", Cfg.ShowInGameHud ? 1 : 0);
         int oh = ReadInt("onlyHost", Cfg.OnlyHostCanEdit ? 1 : 0);
         int rm = ReadInt("roomMode", (int)Cfg.RoomMode);
@@ -1264,6 +1302,8 @@ public class VoiceKillModule : EverestModule
         Cfg.HudScalePercent = Math.Clamp(hs, 40, 100);
         Cfg.SmartPickPercent = Math.Clamp(sp, 0, 100);
         Cfg.SmartPerRound = Math.Clamp(spc, 0, 8);
+        Cfg.NamesPerRound = Math.Clamp(npc, 0, 8);
+        Cfg.GamePerRound = Math.Clamp(gpc, 0, 30);
         Cfg.ShowInGameHud = sh == 1;
         Cfg.OnlyHostCanEdit = oh == 1;
         Cfg.RoomMode = (RoomRole)Math.Clamp(rm, 0, 2);
@@ -1318,6 +1358,8 @@ public class VoiceKillModule : EverestModule
             sb.Append(",\"speaker\":\"").Append(Esc(Speaker())).Append('"');
             sb.Append(",\"source\":").Append((int)Cfg.AudioSource);
             sb.Append(",\"roomError\":\"").Append(Esc(_room?.LastError ?? "")).Append('"');
+            sb.Append(",\"hostScope\":").Append(
+                _room != null && _room.HostScopeRaw >= 0 ? _room.HostScopeRaw : (int)Cfg.DeathScope);
             sb.Append(",\"peerOld\":").Append(_room != null && _room.PeerOutdated ? "true" : "false");
             sb.Append(",\"protocolWarn\":\"").Append(Esc(_room?.ProtocolWarn ?? "")).Append('"');
             sb.Append(",\"hostFull\":\"").Append(Esc(CurrentHostFull())).Append('"');
@@ -1361,6 +1403,8 @@ public class VoiceKillModule : EverestModule
 
             // 词库
             sb.Append(",\"smartPerRound\":").Append(Cfg.SmartPerRound);
+            sb.Append(",\"namesPerRound\":").Append(Cfg.NamesPerRound);
+            sb.Append(",\"gamePerRound\":").Append(Cfg.GamePerRound);
             sb.Append(",\"fatal\":\"").Append(Esc(_fatal)).Append('"');
             sb.Append(",\"binDir\":\"").Append(Esc(_binDir)).Append('"');
 
