@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -151,6 +152,13 @@ public sealed class PanelServer : IDisposable
             text = diag;
             contentType = "text/plain; charset=utf-8";
         }
+        else if (path.Equals("/overlay", StringComparison.OrdinalIgnoreCase))
+        {
+            // 给 OBS / 推流工具用的叠层页。它只能读到「这一轮有哪些词」，
+            // 读不到识别文本、也改不了设置，所以允许局域网访问（OBS 可能在另一台机器上）。
+            text = OverlayPageHtml;
+            contentType = "text/html; charset=utf-8";
+        }
         else if (path.Equals("/panel", StringComparison.OrdinalIgnoreCase))
         {
             // 页面只给本机看：开着房的时候，别让同一局域网的人翻你的面板
@@ -214,26 +222,37 @@ public sealed class PanelServer : IDisposable
     private static string _panelHtml;
 
     /// <summary>控制面板页面，作为内嵌资源打进 dll，不依赖外部文件路径。</summary>
-    public static string PanelHtml
+    public static string PanelHtml => LoadEmbedded("panel.html");
+
+    /// <summary>给 OBS 用的叠层页。</summary>
+    public static string OverlayPageHtml => LoadEmbedded("overlay.html");
+
+    private static readonly Dictionary<string, string> Pages = new Dictionary<string, string>();
+
+    private static string LoadEmbedded(string file)
     {
-        get
+        lock (Pages)
         {
-            if (_panelHtml != null) return _panelHtml;
+            if (Pages.TryGetValue(file, out string cached)) return cached;
+
+            string html = null;
             try
             {
                 var asm = typeof(PanelServer).Assembly;
                 foreach (string name in asm.GetManifestResourceNames())
                 {
-                    if (!name.EndsWith("panel.html", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!name.EndsWith(file, StringComparison.OrdinalIgnoreCase)) continue;
                     using var stream = asm.GetManifestResourceStream(name);
                     using var reader = new System.IO.StreamReader(stream, Encoding.UTF8);
-                    _panelHtml = reader.ReadToEnd();
-                    return _panelHtml;
+                    html = reader.ReadToEnd();
+                    break;
                 }
             }
             catch { }
-            _panelHtml = "<!doctype html><meta charset=utf-8><h1>panel.html 没打进包</h1>";
-            return _panelHtml;
+
+            if (html == null) html = "<!doctype html><meta charset=utf-8><h1>" + file + " 没打进包</h1>";
+            Pages[file] = html;
+            return html;
         }
     }
 }

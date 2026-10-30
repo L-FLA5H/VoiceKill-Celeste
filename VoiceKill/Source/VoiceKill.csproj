@@ -49,6 +49,7 @@
   <!-- 控制面板页面打成内嵌资源，不依赖外部文件路径 -->
   <ItemGroup>
     <EmbeddedResource Include="Resources\panel.html" />
+    <EmbeddedResource Include="Resources\overlay.html" />
   </ItemGroup>
 
   <!-- 核心逻辑直接编进同一个 dll，省得 Everest 去解析额外依赖 -->

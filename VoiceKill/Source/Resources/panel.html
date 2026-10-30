@@ -141,6 +141,22 @@
     <div class="hint" id="modeHint">单人模式：只有你自己说话才算，词每 30 秒换一组。</div>
   </section>
 
+  <!-- 推流叠层 -->
+  <section class="card wide">
+    <h2>推流叠层 <small>给 OBS / 直播工具用</small></h2>
+    <div class="row" style="margin-bottom:8px">
+      <input type="text" id="ovUrl" readonly style="flex:1" value="">
+      <button id="btnOvOpen">打开看看</button>
+      <button class="ghost" id="btnOvCopy">复制地址</button>
+    </div>
+    <div class="hint">
+      在 OBS 里加一个「浏览器」源，把这个地址贴进去。背景是透明的，直接叠在画面上。<br>
+      地址后面可以接参数：<code>?scale=1.4</code> 放大到 140%，<code>?pos=br</code> 贴右下角
+      （tl / tc / tr / bl / bc / br），<code>?row=8</code> 每行最多 8 个词。<br>
+      <span style="color:#8b98a8">这个页面只会显示「这一轮有哪些词」，读不到你说了什么，也不会改动任何设置。</span>
+    </div>
+  </section>
+
   <!-- ② 开房后的设置 -->
   <section class="card wide" id="roomCard">
     <h2>联机设置 <small>只有开房才会用到</small></h2>
@@ -442,6 +458,10 @@ function poll(){
     $("fatalBar").style.display = fatal ? "block" : "none";
     if (fatal) $("fatalText").textContent = fatal;
 
+    var ovPort = st.port || 38471;
+    var ov = $("ovUrl");
+    if (ov && document.activeElement !== ov) ov.value = "http://localhost:" + ovPort + "/overlay";
+
     applyLayout(st);
     renderWords(st.words||[]);
     renderHot("topCur", st.topCur);
@@ -582,6 +602,19 @@ $("btnJoin").onclick = function(){
       else if (j && j.error) toast(j.error);
     });
 };
+$("btnOvOpen").onclick = function(){
+  window.open($("ovUrl").value, "_blank");
+};
+$("btnOvCopy").onclick = function(){
+  var v = $("ovUrl").value;
+  if (navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(v).then(function(){ toast("已复制"); },
+      function(){ $("ovUrl").select(); document.execCommand("copy"); toast("已复制"); });
+  } else {
+    $("ovUrl").select(); document.execCommand("copy"); toast("已复制");
+  }
+};
+
 $("btnLeave").onclick = function(){ post("/api/room/leave").then(function(){ toast("已回到单人"); }); };
 
 ["sHell","sRound","sSmart","sSmartCount","sNamesCount","sGameCount","sHud"].forEach(function(id){

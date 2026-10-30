@@ -35,13 +35,14 @@ internal static class VoiceKillHud
     private const float TargetHeightRatio = 0.075f;  // 单行高度最多占屏高多少
     private const float MaxBlockRatio = 0.30f;      // 所有行加起来最多占屏高多少
     private const float MarginRatio = 0.012f;
-    private const int CacheLimit = 64;
+    private const int CacheLimit = 128;
 
     private static readonly Dictionary<string, Texture2D> Cache = new Dictionary<string, Texture2D>();
     private static readonly Queue<string> Order = new Queue<string>();
     private static bool _unsupported;
     private static bool _loggedError;
     private static bool _loggedSpace;
+    private static int _cacheGen;
     private static Texture2D _white;
 
     // ---------------- 危险词条 ----------------
@@ -59,14 +60,20 @@ internal static class VoiceKillHud
         }
     }
 
+    // ---- 布局缓存 ----
+    // 每帧重算布局会不停 new List / new Vector2 / 拼 Key 字符串，60 帧下来 GC 很忙，
+    // 实测会掉帧。这里把「这一组词 + 这个视口 + 这个缩放」算一次就存起来，
+    // 只要词没换、窗口没缩放，就直接按缓存坐标贴图。
+    private static object _layOwner;
+    private static int _layGen = -1, _layW, _layH, _layPercent = -1;
+    private static Texture2D[] _layTex;
+    private static Vector2[] _layPos;
+    private static float _layScale;
+
     public static void Render(IReadOnlyList<DangerWord> words, int percent)
     {
         if (_unsupported || words == null || words.Count == 0) return;
         if (Engine.Scene is not Level) return;
-
-        bool allReady = true;
-        foreach (DangerWord w in words) if (!Cache.ContainsKey(Key(w))) { allReady = false; break; }
-        if (!allReady) { Warmup(words); return; }
 
         SpriteBatch batch = Draw.SpriteBatch;
         if (batch == null) return;
@@ -74,6 +81,16 @@ internal static class VoiceKillHud
         Viewport vp = batch.GraphicsDevice.Viewport;
         float W = vp.Width, H = vp.Height;
         if (W < 8f || H < 8f) return;
+
+        bool cacheHit = ReferenceEquals(_layOwner, words) && _layGen == _cacheGen &&
+                        _layW == vp.Width && _layH == vp.Height && _layPercent == percent &&
+                        _layTex != null;
+
+        if (cacheHit) { DrawCached(batch); return; }
+
+        bool allReady = true;
+        foreach (DangerWord w in words) if (!Cache.ContainsKey(Key(w))) { allReady = false; break; }
+        if (!allReady) { Warmup(words); return; }
 
         float margin = Math.Max(4f, W * MarginRatio);
 
@@ -116,8 +133,11 @@ internal static class VoiceKillHud
                 $"HUD: 视口 {vp.Width}x{vp.Height}，{rows.Count} 行，缩放 {scale:0.000}");
         }
 
-        batch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp,
-            DepthStencilState.None, RasterizerState.CullNone);
+        // ---- 算坐标，存进缓存 ----
+        int total = words.Count;
+        var texArr = new Texture2D[total];
+        var posArr = new Vector2[total];
+        int k = 0;
 
         float y = margin;
         foreach (var r in rows)
@@ -130,11 +150,44 @@ internal static class VoiceKillHud
             foreach (DangerWord d in r)
             {
                 Texture2D tex = Cache[Key(d)];
-                batch.Draw(tex, new Vector2(MathF.Round(xpos), MathF.Round(y)), null,
-                    XnaColor.White * 0.96f, 0f, Vector2.Zero, scale, SpriteEffects.None, 0f);
+                if (k < total)
+                {
+                    texArr[k] = tex;
+                    posArr[k] = new Vector2(MathF.Round(xpos), MathF.Round(y));
+                    k++;
+                }
                 xpos += tex.Width * scale + gap * scale;
             }
             y += maxH * scale + rowGap * scale;
+        }
+
+        _layOwner = words;
+        _layGen = _cacheGen;
+        _layW = vp.Width;
+        _layH = vp.Height;
+        _layPercent = percent;
+        _layScale = scale;
+        _layTex = texArr;
+        _layPos = posArr;
+
+        DrawCached(batch);
+    }
+
+    private static void DrawCached(SpriteBatch batch)
+    {
+        Texture2D[] tex = _layTex;
+        Vector2[] pos = _layPos;
+        if (tex == null || pos == null) return;
+
+        batch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.LinearClamp,
+            DepthStencilState.None, RasterizerState.CullNone);
+
+        for (int i = 0; i < tex.Length; i++)
+        {
+            Texture2D t = tex[i];
+            if (t == null) continue;
+            batch.Draw(t, pos[i], null, XnaColor.White * 0.96f, 0f, Vector2.Zero, _layScale,
+                SpriteEffects.None, 0f);
         }
 
         batch.End();
@@ -256,6 +309,7 @@ internal static class VoiceKillHud
         Order.Enqueue(key);
         while (Order.Count > CacheLimit)
         {
+            _cacheGen++;
             string old = Order.Dequeue();
             if (Cache.TryGetValue(old, out Texture2D t))
             {

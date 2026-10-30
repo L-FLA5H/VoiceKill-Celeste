@@ -155,10 +155,19 @@ public sealed class DangerWordManager
         // 5) 游戏词库定额（口语 / 正式 / 自定义）
         //    以前只能调「高频」和「智能」的个数，游戏词是补满时随机撞上的，
         //    想要多一点「冲刺 / wavedash」这种就只能靠运气。
-        var gamePool = WordBank.Custom.Concat(WordBank.Casual).Concat(WordBank.Formal)
+        // 自定义词排前面：用户自己加的词如果和上百个内置词一起洗牌，
+        // 基本抽不到（面板上「加了词但从来不出」就是这个原因）。
+        var customPool = WordBank.Custom
             .Where(w => !used.Contains(TextNormalizer.Normalize(w)))
             .OrderBy(_ => _rng.Next())
             .ToList();
+
+        var builtinPool = WordBank.Casual.Concat(WordBank.Formal)
+            .Where(w => !used.Contains(TextNormalizer.Normalize(w)))
+            .OrderBy(_ => _rng.Next())
+            .ToList();
+
+        var gamePool = customPool.Concat(builtinPool).ToList();
 
         int gameCount = 0;
         foreach (string g in gamePool)

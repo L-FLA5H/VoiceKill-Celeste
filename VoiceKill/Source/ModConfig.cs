@@ -36,6 +36,8 @@ public sealed class ModConfig
     public int GamePerRound = 0;
     /// <summary>「游戏词个数」这项是 0.9.7 才加的，老配置迁移用。</summary>
     public bool GameQuotaMigrated = false;
+    /// <summary>0.9.8 把推理线程默认从 4 收到 2，迁移标记。</summary>
+    public bool ThreadsMigrated = false;
     public string SpeakerName = "";
     public bool ShowInGameHud = true;
     public int HudScalePercent = 100;
@@ -43,7 +45,7 @@ public sealed class ModConfig
     // ---- 识别 ----
     public bool MatchOnTheFly = true;
     public bool AllowFuzzy = true;
-    public int InferenceThreads = 4;
+    public int InferenceThreads = 2;
     public string ModelRoot = @"D:\.minecraft\versions\1.21.11-Fabric 0.18.4\voicekill\models";
 
     // ---- 声音 ----
@@ -143,6 +145,7 @@ public sealed class ModConfig
         Add("NamesPerRound", NamesPerRound);
         Add("GamePerRound", GamePerRound);
         Add("GameQuotaMigrated", GameQuotaMigrated ? "1" : "0");
+        Add("ThreadsMigrated", ThreadsMigrated ? "1" : "0");
         Add("SpeakerName", SpeakerName);
         Add("ShowInGameHud", ShowInGameHud ? "1" : "0");
         Add("HudScalePercent", HudScalePercent);
@@ -183,6 +186,7 @@ public sealed class ModConfig
             case "NamesPerRound": NamesPerRound = Int(v, NamesPerRound); break;
             case "GamePerRound": GamePerRound = Int(v, GamePerRound); break;
             case "GameQuotaMigrated": GameQuotaMigrated = Bool(v, GameQuotaMigrated); break;
+            case "ThreadsMigrated": ThreadsMigrated = Bool(v, ThreadsMigrated); break;
             case "SpeakerName": SpeakerName = v; break;
             case "ShowInGameHud": ShowInGameHud = Bool(v, ShowInGameHud); break;
             case "HudScalePercent": HudScalePercent = Int(v, HudScalePercent); break;

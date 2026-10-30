@@ -42,6 +42,9 @@ public class VoiceKillModule : EverestModule
     private volatile bool _remoteKill;
     private volatile bool _rotateRequested;
     private volatile bool _configDirty;
+    private int _bankRev;
+    private int _bankCacheRev = -1;
+    private string _bankCache = "";
     private string _micProblem = "";
     private Level _tickLevel;
     private int _actualPort;
@@ -50,6 +53,8 @@ public class VoiceKillModule : EverestModule
 
     private readonly object _lock = new object();
     private List<DangerWord> _round = new List<DangerWord>();
+    /// <summary>给 HUD 用的只读快照：每轮只生成一次，渲染时按引用判断「词换没换」。</summary>
+    private volatile DangerWord[] _roundSnapshot = Array.Empty<DangerWord>();
     private readonly List<LogItem> _log = new List<LogItem>();
     private readonly List<RoundRecord> _history = new List<RoundRecord>();
     private List<string> _nextWords = new List<string>();
@@ -245,6 +250,14 @@ public class VoiceKillModule : EverestModule
             _cfg.GameQuotaMigrated = true;
             SaveCfg();
         }
+
+        // 0.9.8：老版本默认 4 线程，实测掉帧，统一收到 2（配置里可以再调高）
+        if (!_cfg.ThreadsMigrated)
+        {
+            if (_cfg.InferenceThreads > 2) _cfg.InferenceThreads = 2;
+            _cfg.ThreadsMigrated = true;
+            SaveCfg();
+        }
         if (!string.IsNullOrEmpty(_modDir))
         {
             string dict = Path.Combine(_modDir, WordBank.FileName);
@@ -427,8 +440,7 @@ public class VoiceKillModule : EverestModule
         if (!Cfg.ShowInGameHud) return;
         if (_runtime == null || _startFailed) return;
 
-        DangerWord[] words;
-        lock (_lock) words = _round.ToArray();
+        DangerWord[] words = _roundSnapshot;   // 每轮一份快照，避免每帧 ToArray 分配
         if (words.Length == 0) return;
 
         // 注意：这里传的是 0~100 的百分比，Render 内部再除以 100。
@@ -546,24 +558,12 @@ public class VoiceKillModule : EverestModule
         var opt = new RuntimeOptions();
         opt.Asr.ModelRoot = modelRoot;
         opt.Asr.NativeLibraryDir = _binDir;
-        opt.Asr.NumThreads = Math.Max(2, Cfg.InferenceThreads);
+        // 识别线程越多越吃 CPU，实测 4 线程对这个小模型没多少收益，反而抢游戏帧
+        opt.Asr.NumThreads = Math.Clamp(Cfg.InferenceThreads, 1, 4);
         opt.Asr.EndpointSilence = 0.35f;
         opt.Asr.MaxUtteranceSeconds = 4f;
         opt.MatchPartials = Cfg.MatchOnTheFly;
-        // 每轮总数 = 各项定额之和。以前是「总数 + 几项定额」，两边不一致时
-        // 定额会被悄悄截断，用户调了看不到效果；现在每个滑条都是精确数量。
-        int quotaSum = Math.Max(0, Cfg.NamesPerRound) + Math.Max(0, Cfg.HighFreqPerRound)
-                     + Math.Max(0, Cfg.SmartPerRound) + Math.Max(0, Cfg.GamePerRound);
-        opt.Words.WordsPerRound = quotaSum > 0 ? quotaSum : Math.Max(1, Cfg.WordsPerRound);
-        opt.Words.HighFreqPerRound = Math.Max(0, Cfg.HighFreqPerRound);
-        opt.Words.SmartPerRound = Math.Max(0, Cfg.SmartPerRound);
-        opt.Words.HighFreqExtra = SplitWords(Cfg.HighFreqExtra);
-        opt.Words.HighFreqDisabled = SplitWords(Cfg.HighFreqDisabled);
-        opt.Words.NamesPerRound = Math.Clamp(Cfg.NamesPerRound, 0, 8);
-        opt.Words.GamePerRound = Math.Clamp(Cfg.GamePerRound, 0, 30);
-        opt.Words.SmartPickChance = Cfg.OfflineSync
-            ? 0.0   // 离线同步必须关掉智能选词，否则各自听到的话不同，词就不同步了
-            : Math.Clamp(Cfg.SmartPickPercent, 0, 100) / 100.0;
+        ApplyWordConfig(opt.Words);
         opt.SyncSeed = Cfg.OfflineSync ? StableHash(Cfg.RoomKey) : 0;
         // 客户端只认主机给的词，自己不再按计时器换（否则会闪一下错词）
         opt.ExternalOnly = Cfg.RoomMode == RoomRole.客户端;
@@ -597,6 +597,7 @@ public class VoiceKillModule : EverestModule
             lock (_lock)
             {
                 _round = copy;
+                _roundSnapshot = copy.ToArray();
                 _history.Insert(0, new RoundRecord
                 {
                     T = DateTime.Now.ToString("HH:mm:ss"),
@@ -1005,6 +1006,7 @@ public class VoiceKillModule : EverestModule
                 List<string> words = SplitWords(FormValue(body, "words"));
                 WordBank.SetCustom(words);
                 Cfg.CustomWords = string.Join(",", words);
+                _bankRev++;
                 _configDirty = true;
                 return "{\"ok\":true}";
             }
@@ -1310,15 +1312,7 @@ public class VoiceKillModule : EverestModule
         Cfg.DeathScope = (DeathScope)Math.Clamp(ds, 0, 1);
         if (host.Length > 0) Cfg.RoomHostUrl = host;
 
-        _runtime?.Reconfigure(cfg =>
-        {
-            cfg.WordsPerRound = Cfg.WordsPerRound;
-            cfg.HighFreqPerRound = Cfg.HighFreqPerRound;
-            cfg.SmartPickChance = Cfg.SmartPickPercent / 100.0;
-            cfg.SmartPerRound = Math.Max(0, Cfg.SmartPerRound);
-            cfg.HighFreqExtra = SplitWords(Cfg.HighFreqExtra);
-            cfg.HighFreqDisabled = SplitWords(Cfg.HighFreqDisabled);
-        }, Cfg.RoundSeconds);
+        _runtime?.Reconfigure(cfg => ApplyWordConfig(cfg), Cfg.RoundSeconds);
 
         if (_room != null) _room.Scope = Cfg.DeathScope;
         if (roomChanged) ApplyRoomMode();
@@ -1328,6 +1322,10 @@ public class VoiceKillModule : EverestModule
 
     private string BuildStateJson()
     {
+        // 词库这一坨有 400 多个词条，每 0.8 秒重建一次纯属浪费 CPU 和 GC。
+        // 先在外面拼好（缓存命中时零成本），再进锁拼其它字段，把锁占用时间压到最短。
+        string bankJson = GetBankJson();
+
         var sb = new StringBuilder(4096);
         lock (_lock)
         {
@@ -1340,7 +1338,7 @@ public class VoiceKillModule : EverestModule
             sb.Append(",\"lastAt\":").Append(_deathSeq);
             sb.Append(",\"remain\":").Append(_runtime?.SecondsUntilRotate ?? 0);
 
-            sb.Append(",\"wordsPerRound\":").Append(Cfg.WordsPerRound);
+            sb.Append(",\"wordsPerRound\":").Append(EffectiveRoundWords());
             sb.Append(",\"highFreqPerRound\":").Append(Cfg.HighFreqPerRound);
             sb.Append(",\"roundSeconds\":").Append(Cfg.RoundSeconds);
             sb.Append(",\"hudScale\":").Append(Cfg.HudScalePercent);
@@ -1411,29 +1409,7 @@ public class VoiceKillModule : EverestModule
             sb.Append(",\"namesEnabled\":").Append(ArrayJson(SplitWords(Cfg.Names).ToArray()));
             sb.Append(",\"namesDisabled\":").Append(ArrayJson(SplitWords(Cfg.DisabledNames).ToArray()));
 
-            sb.Append(",\"bank\":{");
-            sb.Append("\"casual\":").Append(ArrayJson(WordBank.Casual));
-            sb.Append(",\"formal\":").Append(ArrayJson(WordBank.Formal));
-            {
-                var dis = new HashSet<string>(StringComparer.Ordinal);
-                foreach (string w in SplitWords(Cfg.HighFreqDisabled)) dis.Add(w);
-                var on = new List<string>();
-                var off = new List<string>();
-                foreach (string w in WordBank.Hell)
-                {
-                    if (dis.Contains(w)) off.Add(w); else on.Add(w);
-                }
-                foreach (string w in SplitWords(Cfg.HighFreqExtra))
-                {
-                    if (!on.Contains(w)) on.Add(w);
-                }
-                sb.Append(",\"hell\":").Append(ArrayJson(on.ToArray()));
-                sb.Append(",\"hellOff\":").Append(ArrayJson(off.ToArray()));
-            }
-            sb.Append(",\"custom\":").Append(ArrayJson(WordBank.Custom.ToArray()));
-            sb.Append(",\"names\":").Append(ArrayJson(SplitWords(Cfg.Names).ToArray()));
-            sb.Append(",\"namesOff\":").Append(ArrayJson(SplitWords(Cfg.DisabledNames).ToArray()));
-            sb.Append('}');
+            sb.Append(",\"bank\":").Append(bankJson);
 
             sb.Append(",\"last\":{\"text\":\"").Append(Esc(_lastText))
               .Append("\",\"word\":\"").Append(Esc(_lastWord))
@@ -1512,6 +1488,69 @@ public class VoiceKillModule : EverestModule
 
     // ---------------- 小工具 ----------------
 
+    /// <summary>
+    /// 每轮总共几个词 = 四项定额之和。
+    /// 0.9.8 之前这里是「总数」和「几项定额」两套数并存，实时改设置时只下发了总数，
+    /// 于是面板上填 20 个、实际只出 10 个（用户的原始反馈）。
+    /// </summary>
+    /// <summary>整份词库的 JSON（缓存，词库改动时 _bankRev 变化才重建）。</summary>
+    private string GetBankJson()
+    {
+        int rev = _bankRev;
+        if (rev == _bankCacheRev) return _bankCache;
+
+        var sb = new StringBuilder(8192);
+        sb.Append('{');
+        sb.Append("\"casual\":").Append(ArrayJson(WordBank.Casual));
+        sb.Append(",\"formal\":").Append(ArrayJson(WordBank.Formal));
+
+        var dis = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string w in SplitWords(Cfg.HighFreqDisabled)) dis.Add(w);
+        var on = new List<string>();
+        var off = new List<string>();
+        foreach (string w in WordBank.Hell)
+        {
+            if (dis.Contains(w)) off.Add(w); else on.Add(w);
+        }
+        foreach (string w in SplitWords(Cfg.HighFreqExtra))
+        {
+            if (!on.Contains(w)) on.Add(w);
+        }
+        sb.Append(",\"hell\":").Append(ArrayJson(on));
+        sb.Append(",\"hellOff\":").Append(ArrayJson(off));
+
+        sb.Append(",\"custom\":").Append(ArrayJson(WordBank.Custom));
+        sb.Append(",\"names\":").Append(ArrayJson(SplitWords(Cfg.Names)));
+        sb.Append(",\"namesOff\":").Append(ArrayJson(SplitWords(Cfg.DisabledNames)));
+        sb.Append('}');
+
+        string json = sb.ToString();
+        _bankCache = json;
+        _bankCacheRev = rev;
+        return json;
+    }
+
+    private int EffectiveRoundWords()
+    {
+        int sum = Math.Max(0, Cfg.NamesPerRound) + Math.Max(0, Cfg.HighFreqPerRound)
+                + Math.Max(0, Cfg.SmartPerRound) + Math.Max(0, Cfg.GamePerRound);
+        return sum > 0 ? sum : Math.Max(1, Cfg.WordsPerRound);
+    }
+
+    /// <summary>把当前配置灌进组词器。启动和「实时改设置」都走这里，避免两套逻辑走偏。</summary>
+    private void ApplyWordConfig(DangerWordConfig cfg)
+    {
+        cfg.WordsPerRound = EffectiveRoundWords();
+        cfg.HighFreqPerRound = Math.Max(0, Cfg.HighFreqPerRound);
+        cfg.SmartPerRound = Math.Max(0, Cfg.SmartPerRound);
+        cfg.NamesPerRound = Math.Clamp(Cfg.NamesPerRound, 0, 8);
+        cfg.GamePerRound = Math.Clamp(Cfg.GamePerRound, 0, 30);
+        cfg.SmartPickChance = Cfg.OfflineSync ? 0.0 : Math.Clamp(Cfg.SmartPickPercent, 0, 100) / 100.0;
+        cfg.Names = SplitWords(Cfg.Names);
+        cfg.HighFreqExtra = SplitWords(Cfg.HighFreqExtra);
+        cfg.HighFreqDisabled = SplitWords(Cfg.HighFreqDisabled);
+    }
+
     /// <summary>把网络异常翻译成用户看得懂的话。</summary>
     private static string FriendlyNetError(Exception ex)
     {
@@ -1538,6 +1577,7 @@ public class VoiceKillModule : EverestModule
 
     private static void SaveCfg()
     {
+        if (Instance != null) Instance._bankRev++;
         try { _cfg.Save(_modDir); } catch { }
     }
 

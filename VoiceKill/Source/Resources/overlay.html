@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>VoiceKill 叠层</title>
+<style>
+  /* 给 OBS「浏览器源」用：背景必须透明，只留词条本身 */
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  body {
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  #wrap {
+    display: flex; flex-wrap: wrap; gap: 10px; padding: 18px;
+    align-content: flex-start;
+  }
+  #wrap.bottom { align-content: flex-end; }
+  #wrap.center { justify-content: center; }
+  #wrap.right  { justify-content: flex-end; }
+
+  .chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 7px 14px 8px; border-radius: 12px;
+    background: rgba(12, 16, 22, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+    color: #fff; font-weight: 700;
+    font-size: 30px; line-height: 1.15;
+    white-space: nowrap;
+  }
+  .chip .dot { width: 8px; height: 8px; border-radius: 50%; background: #8b98a8; }
+  .chip.hell    { border-color: rgba(255, 110, 110, 0.55); }
+  .chip.hell    .dot { background: #ff6b6b; }
+  .chip.name    { border-color: rgba(180, 150, 255, 0.55); }
+  .chip.name    .dot { background: #b496ff; }
+  .chip.smart   { border-color: rgba(63, 190, 239, 0.55); }
+  .chip.smart   .dot { background: #3FBEEF; }
+  .chip.random  .dot { background: #7fd7a0; }
+  .chip.manual  { border-color: rgba(255, 210, 122, 0.55); }
+  .chip.manual  .dot { background: #ffd27a; }
+
+  #empty { color: rgba(255,255,255,.55); font-size: 18px; padding: 18px; }
+</style>
+</head>
+<body>
+<div id="wrap"></div>
+
+<script>
+(function(){
+  var q = new URLSearchParams(location.search);
+  var scale = Math.max(0.4, Math.min(4, Number(q.get("scale") || 1)));
+  var pos   = (q.get("pos") || "tl").toLowerCase();   // tl / tc / tr / bl / bc / br
+  var perRow = Math.max(2, Math.min(20, Number(q.get("row") || 10)));
+
+  var wrap = document.getElementById("wrap");
+  if (pos === "bottom") { wrap.classList.add("bottom"); }
+  if (pos === "center") { wrap.classList.add("center"); }
+  if (pos === "right")  { wrap.classList.add("right"); }
+  // 四个角也能写：tl/tr 走默认，bl/br 贴底
+  if (pos === "bl" || pos === "br") wrap.classList.add("bottom");
+  if (pos === "tr" || pos === "br") wrap.classList.add("right");
+
+  var KIND = { "Hell": "hell", "Name": "name", "Smart": "smart", "Random": "random", "Manual": "manual" };
+  var lastSig = "";
+
+  function render(list){
+    var sig = list.map(function(w){ return w.t + "|" + w.s; }).join(",");
+    if (sig === lastSig) return;          // 没变化就别动 DOM，OBS 里少一次重排
+    lastSig = sig;
+
+    if (!list.length){
+      wrap.innerHTML = '<div id="empty">等词…</div>';
+      return;
+    }
+
+    var html = "";
+    for (var i = 0; i < list.length; i++){
+      var w = list[i] || {};
+      var cls = KIND[w.s] || "random";
+      if (i > 0 && i % perRow === 0) html += '<div style="flex-basis:100%;height:0"></div>';
+      html += '<span class="chip ' + cls + '"><i class="dot"></i>' + escapeHtml(w.t || "") + "</span>";
+    }
+    wrap.innerHTML = html;
+  }
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, function(c){
+      return ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[c];
+    });
+  }
+
+  function tick(){
+    fetch("/state", { cache: "no-store" })
+      .then(function(r){ return r.json(); })
+      .then(function(st){
+        document.documentElement.style.fontSize = (16 * scale) + "px";
+        wrap.style.zoom = scale;
+        render((st && st.words) || []);
+      })
+      .catch(function(){ /* 面板服务没起来就静静等着 */ });
+  }
+
+  tick();
+  setInterval(tick, 800);
+})();
+</script>
+</body>
+</html>
