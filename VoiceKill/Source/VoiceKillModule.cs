@@ -463,6 +463,8 @@ public class VoiceKillModule : EverestModule
         if (!ReferenceEquals(_tickLevel, level))
         {
             _tickLevel = level;
+            _pending = null;   // 上一关/上一个场景遗留的处决不带到新关里
+            _runtime?.DropBufferedAudio();   // 菜单里那半句话也别带进来
             RoomSync room0 = _room;
             if (room0 != null && Cfg.RoomMode == RoomRole.客户端) room0.ForceResync();
         }
@@ -515,18 +517,33 @@ public class VoiceKillModule : EverestModule
         }
 
         _pending = null;
-        Execute(level, pending);
+        if (!Execute(level, pending))
+        {
+            // 进图瞬间玩家可能还没生成；留 0.4 秒重试，别把这次处决吞了
+            if ((DateTime.Now - pending.At).TotalSeconds < 0.4) _pending = pending;
+            else Logger.Log(LogLevel.Warn, Tag,
+                "处决丢失：一直找不到玩家（" + (pending.Word?.Text ?? "?") + "）");
+        }
     }
 
-    private void Execute(Level level, Verdict verdict)
+    /// <summary>返回 false = 现在杀不了（玩家还没生成），调用方可以留到下一帧重试。</summary>
+    private bool Execute(Level level, Verdict verdict)
     {
         Player player = null;
         try { player = level.Entities?.FindFirst<Player>(); } catch { }
-        if (player == null || player.Dead) return;
+
+        if (player == null)
+        {
+            Logger.Log(LogLevel.Debug, Tag, "处决暂缓：这一帧还找不到玩家");
+            return false;
+        }
+        if (player.Dead) return true;   // 已经死了，这次算完成
 
         try
         {
-            player.Die(Microsoft.Xna.Framework.Vector2.Zero, false, true);
+            // evenIfInvincible = true：以前传 false，玩家处在无敌/受击闪烁状态时
+            // Die() 会被静默忽略 —— 这就是「说了词不死」的一种情况。
+            player.Die(Microsoft.Xna.Framework.Vector2.Zero, true, true);
             Logger.Log(LogLevel.Info, Tag,
                 $"处决: 「{verdict.Word?.Text}」({verdict.KindLabel}/{verdict.Via})");
         }
@@ -534,6 +551,7 @@ public class VoiceKillModule : EverestModule
         {
             Logger.Log(LogLevel.Error, Tag, "player.Die() 失败: " + ex.Message);
         }
+        return true;
     }
 
     // ---------------- 启动 / 停止 ----------------
@@ -622,6 +640,13 @@ public class VoiceKillModule : EverestModule
 
         runtime.OnDeath += verdict =>
         {
+            // 兜底：万一声音是在菜单/过场里判中的，不进待执行队列
+            if (Monocle.Engine.Scene is not Level)
+            {
+                Logger.Log(LogLevel.Debug, Tag, "非关卡场景里判中「" + (verdict.Word?.Text ?? "?") + "」，忽略");
+                return;
+            }
+
             lock (_lock)
             {
                 _lastText = verdict.Utterance?.DisplayText ?? "";
@@ -637,6 +662,13 @@ public class VoiceKillModule : EverestModule
             _hitAt = DateTime.Now;
             _hitWord = verdict.Word?.Text ?? "";
             _hitSpeaker = Speaker();
+
+            // 留一条痕迹：以后判断「判中了但没死」还是「根本没判中」，看这行就知道
+            Logger.Log(LogLevel.Info, Tag,
+                $"判中「{verdict.Word?.Text}」({verdict.KindLabel}/{verdict.Via})" +
+                (Monocle.Engine.Scene is Level lv
+                    ? $" 场景=Level trans={lv.Transitioning} paused={lv.FrozenOrPaused}"
+                    : " 场景=非关卡"));
 
             runtime.OnPlayerDied();
             _pending = verdict;
@@ -657,7 +689,12 @@ public class VoiceKillModule : EverestModule
         };
 
         _mic = new MicCapture();
-        _mic.OnSamples += samples => runtime.Feed(samples);
+        _mic.OnSamples += samples =>
+        {
+            // 只在关卡里识别。以前选关界面也会一直判词，杀了又找不到玩家，
+            // 结果把「处决」攒到进图那一刻执行 —— 就是「进图先死一次」的由来。
+            if (Monocle.Engine.Scene is Level) runtime.Feed(samples);
+        };
 
         _runtime = runtime;
         runtime.Start();

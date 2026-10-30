@@ -248,6 +248,16 @@ public sealed class VoiceKillRuntime : IDisposable
         try { _queue.TryAdd(copy); } catch { }
     }
 
+    /// <summary>
+    /// 丢掉已经缓冲但还没识别完的音频，并让识别流重新开始。
+    /// 进/出关卡时调用：否则菜单里说到的半句话会被带进关卡，一进图就判中。
+    /// </summary>
+    public void DropBufferedAudio()
+    {
+        try { while (_queue.TryTake(out _)) { } } catch { }
+        _resetPending = true;
+    }
+
     /// <summary>立刻换一组词（进新房间、过图、手动点按钮都调这个）。</summary>
     public void RotateNow()
     {
