@@ -73,6 +73,8 @@ namespace VoiceKill.Cli
             }
 
             // 9. 单字禁令：组词器永远不出单字
+            //    注意高频地狱词（我/你/是/不…）本来就有单字，是 MC 版的原设计，
+            //    单字禁令只对自定义 / 人名 / 智能 / 随机池生效，Hell 除外。
             {
                 var cfg = new DangerWordConfig { WordsPerRound = 12 };
                 var mgr = new DangerWordManager(cfg, new SpeechStats(), seed: 12345);
@@ -83,11 +85,12 @@ namespace VoiceKill.Cli
                     var round = mgr.NextRound();
                     foreach (var w in round)
                     {
+                        if (w.Source == WordSource.Hell) continue;
                         string norm = TextNormalizer.Normalize(w.Text);
                         if (norm.Length < 2) { allOk = false; bad = w.Text; break; }
                     }
                 }
-                Check("组词器不出单字（30 轮）", allOk, "出现了单字: " + bad);
+                Check("组词器不出单字（Hell 组的单字除外）", allOk, "出现了单字: " + bad);
             }
 
             // 10. 智能选词能捞到刚聊过的词
@@ -120,6 +123,58 @@ namespace VoiceKill.Cli
                 opt.DeathCooldownSeconds = 1.5;
                 opt.Asr.ModelRoot = "";
                 Check("死亡冷却参数存在", opt.DeathCooldownSeconds > 0, "");
+            }
+
+            // 13. 智能词不能切出跨词边界的假词（2026-11-01 用户报的）
+            //     「别搞别搞」滑窗会切出「搞别搞」「搞别」「别搞别」
+            {
+                var stats = new SpeechStats();
+                stats.Add("别搞别搞");
+                stats.Add("你别搞啊");
+                stats.Add("别搞别搞");
+                stats.Add("别搞了吧");
+                var cands = stats.Candidates(24);
+                string all = string.Join("/", cands.ToArray());
+                bool good = cands.Contains("别搞") &&
+                            !cands.Contains("搞别搞") && !cands.Contains("搞别") && !cands.Contains("别搞别");
+                Check("智能词不出「搞别搞」", good, "候选: " + all);
+            }
+
+            // 14. 「浏览器」不能切出「览器」
+            {
+                var stats = new SpeechStats();
+                stats.Add("我打开浏览器看一下");
+                stats.Add("浏览器卡住了");
+                stats.Add("这个浏览器真慢");
+                var cands = stats.Candidates(24);
+                string all = string.Join("/", cands.ToArray());
+                bool good = cands.Contains("浏览器") && !cands.Contains("览器");
+                Check("智能词不出「览器」", good, "候选: " + all);
+            }
+
+            // 15. 「走路走路」不能切出「路走路」
+            {
+                var stats = new SpeechStats();
+                stats.Add("走路走路小心点");
+                stats.Add("别走路了");
+                stats.Add("走路过去吧");
+                var cands = stats.Candidates(24);
+                string all = string.Join("/", cands.ToArray());
+                bool good = cands.Contains("走路") && !cands.Contains("路走路") && !cands.Contains("走路走");
+                Check("智能词不出「路走路」", good, "候选: " + all);
+            }
+
+            // 16. 去胶水：候选不能是「核心词 + 一个虚词」
+            {
+                var stats = new SpeechStats();
+                stats.Add("我昨天去超市了");
+                stats.Add("今天超市好多人");
+                stats.Add("超市那边排队");
+                var cands = stats.Candidates(24);
+                string all = string.Join("/", cands.ToArray());
+                bool good = cands.Contains("超市") &&
+                            !cands.Contains("超市了") && !cands.Contains("去超市");
+                Check("候选去掉两头虚词（有「超市」、无「超市了」）", good, "候选: " + all);
             }
 
             Console.WriteLine();
