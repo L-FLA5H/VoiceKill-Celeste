@@ -56,25 +56,10 @@
     100% { transform: scale(1); }
   }
 
-  /* 顶部（或底部）闪一条「被 X 杀了」，2 秒后自己消失 */
-  #killBar {
-    position: fixed; left: 50%; transform: translateX(-50%);
-    padding: 10px 22px 12px; border-radius: 14px;
-    background: rgba(120, 16, 16, 0.9);
-    border: 1px solid rgba(255, 110, 110, .75);
-    box-shadow: 0 0 30px rgba(255, 50, 50, .5);
-    color: #fff; font-size: 26px; font-weight: 800; white-space: nowrap;
-    opacity: 0; pointer-events: none; transition: opacity .18s ease;
-    top: 18px;
-  }
-  #killBar.show { opacity: 1; }
-  #killBar.low  { top: auto; bottom: 18px; }
-  #killBar .w { color: #ffd27a; }
 </style>
 </head>
 <body>
 <div id="wrap"></div>
-<div id="killBar">💀 被「<span class="w"></span>」杀了</div>
 
 <script>
 (function(){
@@ -93,13 +78,6 @@
   var lastSig = "";
 
   var lastDeaths = -1;       // -1 = 还没拿到第一次数据，别把历史死亡当成刚发生的
-  var killTimer = 0;
-  var bar = document.getElementById("killBar");
-
-  // 播报条要和词条待在相反的一侧，不然会叠在一起：
-  // 词在上半屏（tl/tc/tr）→ 播报贴底；词在下半屏 → 播报贴顶
-  var chipsAtBottom = (pos === "bl" || pos === "bc" || pos === "br");
-  if (!chipsAtBottom) bar.classList.add("low");
 
   function render(list){
     var sig = list.map(function(w){ return w.t + "|" + w.s; }).join(",");
@@ -130,7 +108,7 @@
   function flashKill(word){
     if (!word) return;
 
-    // 词还在这一轮里 → 让那个词条红一下
+    // 只让「被这个词」红一下，不弹任何文字
     var chips = wrap.querySelectorAll(".chip");
     for (var i = 0; i < chips.length; i++){
       if (chips[i].getAttribute("data-w") === word){
@@ -139,12 +117,6 @@
         chips[i].classList.add("dead");
       }
     }
-
-    // 不管词还在不在，都闪一条播报（词可能刚好换掉了）
-    bar.querySelector(".w").textContent = word;
-    bar.classList.add("show");
-    clearTimeout(killTimer);
-    killTimer = setTimeout(function(){ bar.classList.remove("show"); }, 2000);
   }
 
   function tick(){
