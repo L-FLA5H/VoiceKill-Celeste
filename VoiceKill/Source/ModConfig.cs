@@ -32,7 +32,9 @@ public sealed class ModConfig
     public int SmartPerRound = 2;
     /// <summary>每轮塞几个人名（从「人名危险词」里抽）。0 = 不塞。</summary>
     public int NamesPerRound = 1;
-    /// <summary>每轮塞几个游戏词（口语 / 正式 / 自定义）。0 = 只在补满时随机撞上。</summary>
+    /// <summary>每轮塞几个自定义词。</summary>
+    public int CustomPerRound = 2;
+    /// <summary>每轮塞几个内置游戏词（口语 / 正式）。0 = 只在补满时随机撞上。</summary>
     public int GamePerRound = 0;
     /// <summary>「游戏词个数」这项是 0.9.7 才加的，老配置迁移用。</summary>
     public bool GameQuotaMigrated = false;
@@ -143,6 +145,7 @@ public sealed class ModConfig
         Add("SmartPickPercent", SmartPickPercent);
         Add("SmartPerRound", SmartPerRound);
         Add("NamesPerRound", NamesPerRound);
+        Add("CustomPerRound", CustomPerRound);
         Add("GamePerRound", GamePerRound);
         Add("GameQuotaMigrated", GameQuotaMigrated ? "1" : "0");
         Add("ThreadsMigrated", ThreadsMigrated ? "1" : "0");
@@ -184,6 +187,7 @@ public sealed class ModConfig
             case "SmartPickPercent": SmartPickPercent = Int(v, SmartPickPercent); break;
             case "SmartPerRound": SmartPerRound = Int(v, SmartPerRound); break;
             case "NamesPerRound": NamesPerRound = Int(v, NamesPerRound); break;
+            case "CustomPerRound": CustomPerRound = Int(v, CustomPerRound); break;
             case "GamePerRound": GamePerRound = Int(v, GamePerRound); break;
             case "GameQuotaMigrated": GameQuotaMigrated = Bool(v, GameQuotaMigrated); break;
             case "ThreadsMigrated": ThreadsMigrated = Bool(v, ThreadsMigrated); break;

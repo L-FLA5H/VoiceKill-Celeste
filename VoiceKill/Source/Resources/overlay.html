@@ -5,13 +5,15 @@
 <title>VoiceKill 叠层</title>
 <style>
   /* 给 OBS「浏览器源」用：背景必须透明，只留词条本身 */
-  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  html, body { margin: 0; padding: 0; height: 100%; background: transparent; overflow: hidden; }
   body {
     font-family: "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
   #wrap {
     display: flex; flex-wrap: wrap; gap: 10px; padding: 18px;
+    box-sizing: border-box;
+    height: 100%;                 /* 不撑满的话 align-content 不生效，贴底就没反应 */
     align-content: flex-start;
   }
   #wrap.bottom { align-content: flex-end; }
@@ -40,10 +42,39 @@
   .chip.manual  .dot { background: #ffd27a; }
 
   #empty { color: rgba(255,255,255,.55); font-size: 18px; padding: 18px; }
+
+  /* 被这个词杀掉：红一下再弹回来 */
+  .chip.dead {
+    border-color: #ff5a5a !important;
+    background: rgba(130, 18, 18, 0.92) !important;
+    box-shadow: 0 0 0 3px rgba(255, 90, 90, .55), 0 0 26px rgba(255, 60, 60, .75);
+    animation: deadPulse 1.1s ease-out;
+  }
+  @keyframes deadPulse {
+    0%   { transform: scale(1.28); }
+    28%  { transform: scale(1.14); }
+    100% { transform: scale(1); }
+  }
+
+  /* 顶部（或底部）闪一条「被 X 杀了」，2 秒后自己消失 */
+  #killBar {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    padding: 10px 22px 12px; border-radius: 14px;
+    background: rgba(120, 16, 16, 0.9);
+    border: 1px solid rgba(255, 110, 110, .75);
+    box-shadow: 0 0 30px rgba(255, 50, 50, .5);
+    color: #fff; font-size: 26px; font-weight: 800; white-space: nowrap;
+    opacity: 0; pointer-events: none; transition: opacity .18s ease;
+    top: 18px;
+  }
+  #killBar.show { opacity: 1; }
+  #killBar.low  { top: auto; bottom: 18px; }
+  #killBar .w { color: #ffd27a; }
 </style>
 </head>
 <body>
 <div id="wrap"></div>
+<div id="killBar">💀 被「<span class="w"></span>」杀了</div>
 
 <script>
 (function(){
@@ -53,15 +84,22 @@
   var perRow = Math.max(2, Math.min(20, Number(q.get("row") || 10)));
 
   var wrap = document.getElementById("wrap");
-  if (pos === "bottom") { wrap.classList.add("bottom"); }
-  if (pos === "center") { wrap.classList.add("center"); }
-  if (pos === "right")  { wrap.classList.add("right"); }
-  // 四个角也能写：tl/tr 走默认，bl/br 贴底
-  if (pos === "bl" || pos === "br") wrap.classList.add("bottom");
-  if (pos === "tr" || pos === "br") wrap.classList.add("right");
+  // pos: tl tc tr / bl bc br （也能写 left/center/right 这种老值）
+  if (pos === "bottom" || pos === "bl" || pos === "bc" || pos === "br") wrap.classList.add("bottom");
+  if (pos === "center" || pos === "tc" || pos === "bc")               wrap.classList.add("center");
+  if (pos === "right"  || pos === "tr" || pos === "br")               wrap.classList.add("right");
 
   var KIND = { "Hell": "hell", "Name": "name", "Smart": "smart", "Random": "random", "Manual": "manual" };
   var lastSig = "";
+
+  var lastDeaths = -1;       // -1 = 还没拿到第一次数据，别把历史死亡当成刚发生的
+  var killTimer = 0;
+  var bar = document.getElementById("killBar");
+
+  // 播报条要和词条待在相反的一侧，不然会叠在一起：
+  // 词在上半屏（tl/tc/tr）→ 播报贴底；词在下半屏 → 播报贴顶
+  var chipsAtBottom = (pos === "bl" || pos === "bc" || pos === "br");
+  if (!chipsAtBottom) bar.classList.add("low");
 
   function render(list){
     var sig = list.map(function(w){ return w.t + "|" + w.s; }).join(",");
@@ -78,7 +116,7 @@
       var w = list[i] || {};
       var cls = KIND[w.s] || "random";
       if (i > 0 && i % perRow === 0) html += '<div style="flex-basis:100%;height:0"></div>';
-      html += '<span class="chip ' + cls + '"><i class="dot"></i>' + escapeHtml(w.t || "") + "</span>";
+      html += '<span class="chip ' + cls + '" data-w="' + escapeHtml(w.t || "") + '"><i class="dot"></i>' + escapeHtml(w.t || "") + "</span>";
     }
     wrap.innerHTML = html;
   }
@@ -89,13 +127,39 @@
     });
   }
 
+  function flashKill(word){
+    if (!word) return;
+
+    // 词还在这一轮里 → 让那个词条红一下
+    var chips = wrap.querySelectorAll(".chip");
+    for (var i = 0; i < chips.length; i++){
+      if (chips[i].getAttribute("data-w") === word){
+        chips[i].classList.remove("dead");
+        void chips[i].offsetWidth;   // 强制重排，动画才能重新触发
+        chips[i].classList.add("dead");
+      }
+    }
+
+    // 不管词还在不在，都闪一条播报（词可能刚好换掉了）
+    bar.querySelector(".w").textContent = word;
+    bar.classList.add("show");
+    clearTimeout(killTimer);
+    killTimer = setTimeout(function(){ bar.classList.remove("show"); }, 2000);
+  }
+
   function tick(){
     fetch("/state", { cache: "no-store" })
       .then(function(r){ return r.json(); })
       .then(function(st){
+        if (!st) return;
         document.documentElement.style.fontSize = (16 * scale) + "px";
         wrap.style.zoom = scale;
-        render((st && st.words) || []);
+        render(st.words || []);
+
+        var deaths = Number(st.deaths || 0);
+        if (lastDeaths < 0) lastDeaths = deaths;              // 首帧只记基线
+        else if (deaths > lastDeaths) flashKill((st.last || {}).word);
+        lastDeaths = deaths;
       })
       .catch(function(){ /* 面板服务没起来就静静等着 */ });
   }

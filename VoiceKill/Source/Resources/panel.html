@@ -145,14 +145,23 @@
   <section class="card wide">
     <h2>推流叠层 <small>给 OBS / 直播工具用</small></h2>
     <div class="row" style="margin-bottom:8px">
-      <input type="text" id="ovUrl" readonly style="flex:1" value="">
+      <select id="ovPos" style="max-width:110px">
+        <option value="tl">左上角</option>
+        <option value="tc">顶部居中</option>
+        <option value="tr" selected>右上角</option>
+        <option value="bl">左下角</option>
+        <option value="bc">底部居中</option>
+        <option value="br">右下角</option>
+      </select>
       <button id="btnOvOpen">打开看看</button>
       <button class="ghost" id="btnOvCopy">复制地址</button>
     </div>
+    <div class="row" style="margin-bottom:8px">
+      <input type="text" id="ovUrl" readonly style="flex:1" value="">
+    </div>
     <div class="hint">
       在 OBS 里加一个「浏览器」源，把这个地址贴进去。背景是透明的，直接叠在画面上。<br>
-      地址后面可以接参数：<code>?scale=1.4</code> 放大到 140%，<code>?pos=br</code> 贴右下角
-      （tl / tc / tr / bl / bc / br），<code>?row=8</code> 每行最多 8 个词。<br>
+      想更精细可以在地址后面接参数：<code>?scale=1.4</code> 放大到 140%，<code>?row=8</code> 每行最多 8 个词。<br>
       <span style="color:#8b98a8">这个页面只会显示「这一轮有哪些词」，读不到你说了什么，也不会改动任何设置。</span>
     </div>
   </section>
@@ -231,13 +240,16 @@
   <section class="card">
     <h2>选词设置</h2>
     <div class="slider"><label>本轮总共</label><b id="vWords" style="min-width:auto"></b></div>
+    <div class="hint" id="quotaHint" style="margin:-4px 0 8px"></div>
+
+    <div class="slider"><label>自定义词</label><input type="range" id="sCustomCount" min="0" max="10"><b id="vCustomCount"></b></div>
+    <div class="slider"><label>人名</label><input type="range" id="sNamesCount" min="0" max="6"><b id="vNamesCount"></b></div>
     <div class="slider"><label>高频地狱词</label><input type="range" id="sHell" min="0" max="10"><b id="vHell"></b></div>
-    <div class="slider"><label>轮换间隔</label><input type="range" id="sRound" min="5" max="120" step="5"><b id="vRound"></b></div>
-    <div class="slider"><label>智能概率</label><input type="range" id="sSmart" min="0" max="100" step="5"><b id="vSmart"></b></div>
-    <div class="slider"><label>智能词个数</label><input type="range" id="sSmartCount" min="0" max="8"><b id="vSmartCount"></b></div>
-    <div class="slider"><label>人名个数</label><input type="range" id="sNamesCount" min="0" max="6"><b id="vNamesCount"></b></div>
-    <div class="slider"><label>游戏词个数</label><input type="range" id="sGameCount" min="0" max="20"><b id="vGameCount"></b></div>
-    <div class="hint" id="quotaHint" style="margin:-2px 0 6px"></div>
+    <div class="slider"><label>智能词</label><input type="range" id="sSmartCount" min="0" max="8"><b id="vSmartCount"></b></div>
+    <div class="slider"><label>　└ 触发概率</label><input type="range" id="sSmart" min="0" max="100" step="5"><b id="vSmart"></b></div>
+    <div class="slider"><label>游戏词（内置）</label><input type="range" id="sGameCount" min="0" max="20"><b id="vGameCount"></b></div>
+
+    <div class="slider" style="margin-top:14px"><label>轮换间隔</label><input type="range" id="sRound" min="5" max="120" step="5"><b id="vRound"></b></div>
     <div class="slider"><label>禁词大小</label><input type="range" id="sHud" min="40" max="100" step="5"><b id="vHud"></b></div>
     <div class="row" style="margin-top:8px">
       <label class="meta"><input type="checkbox" id="cHud"> 游戏里显示禁词</label>
@@ -458,9 +470,8 @@ function poll(){
     $("fatalBar").style.display = fatal ? "block" : "none";
     if (fatal) $("fatalText").textContent = fatal;
 
-    var ovPort = st.port || 38471;
-    var ov = $("ovUrl");
-    if (ov && document.activeElement !== ov) ov.value = "http://localhost:" + ovPort + "/overlay";
+    OV_PORT = st.port || 38471;
+    refreshOverlayUrl();
 
     applyLayout(st);
     renderWords(st.words||[]);
@@ -500,6 +511,7 @@ function poll(){
       $("sRound").value = st.roundSeconds; $("sSmart").value = st.smartPick;
       $("sHud").value = st.hudScale; $("cHud").checked = !!st.showHud;
       $("sSmartCount").value = st.smartPerRound == null ? 2 : st.smartPerRound;
+      $("sCustomCount").value = st.customPerRound == null ? 2 : st.customPerRound;
       $("sNamesCount").value = st.namesPerRound == null ? 1 : st.namesPerRound;
       $("sGameCount").value = st.gamePerRound == null ? 0 : st.gamePerRound;
       labels();
@@ -520,20 +532,22 @@ function poll(){
 }
 
 function labels(){
+  var nCustom = Number($("sCustomCount").value);
   var nName = Number($("sNamesCount").value), nHell = Number($("sHell").value);
   var nSmart = Number($("sSmartCount").value), nGame = Number($("sGameCount").value);
-  var total = nName + nHell + nSmart + nGame;
+  var total = nCustom + nName + nHell + nSmart + nGame;
   $("vWords").textContent = total + " 个";
   $("vHell").textContent  = $("sHell").value + " 个";
   $("vRound").textContent = $("sRound").value + "s";
   $("vSmart").textContent = $("sSmart").value + "%";
   $("vSmartCount").textContent = $("sSmartCount").value + " 个";
+  $("vCustomCount").textContent = $("sCustomCount").value + " 个";
   $("vNamesCount").textContent = $("sNamesCount").value + " 个";
   $("vGameCount").textContent = $("sGameCount").value + " 个";
 
-  $("quotaHint").innerHTML = '<span style="color:#8b98a8">本轮 ' + total + ' 个 = 人名 ' + nName +
-    ' + 高频 ' + nHell + ' + 智能 ' + nSmart + ' + 游戏词 ' + nGame +
-    '（面板上临时指定「下一轮」的词会另外加上）</span>';
+  $("quotaHint").innerHTML = '<span style="color:#8b98a8">本轮 ' + total + ' 个 = 自定义 ' + nCustom +
+    ' + 人名 ' + nName + ' + 高频 ' + nHell + ' + 智能 ' + nSmart + ' + 游戏词 ' + nGame +
+    '（临时指定「下一轮」的词另外加）</span>';
   $("vHud").textContent   = $("sHud").value + "%";
 }
 
@@ -602,6 +616,27 @@ $("btnJoin").onclick = function(){
       else if (j && j.error) toast(j.error);
     });
 };
+var OV_PORT = 38471;
+
+function refreshOverlayUrl(){
+  var pos = $("ovPos").value || "tr";
+  try { localStorage.setItem("vkOvPos", pos); } catch (e) {}
+  var url = "http://localhost:" + OV_PORT + "/overlay";
+  if (pos && pos !== "tr") url += "?pos=" + pos;   // 默认右上，不加参数
+  $("ovUrl").value = url;
+}
+
+$("ovPos").onchange = refreshOverlayUrl;
+
+// 记住上次选的位置
+(function(){
+  try {
+    var saved = localStorage.getItem("vkOvPos");
+    if (saved) $("ovPos").value = saved;
+  } catch (e) {}
+  refreshOverlayUrl();
+})();
+
 $("btnOvOpen").onclick = function(){
   window.open($("ovUrl").value, "_blank");
 };
@@ -617,12 +652,12 @@ $("btnOvCopy").onclick = function(){
 
 $("btnLeave").onclick = function(){ post("/api/room/leave").then(function(){ toast("已回到单人"); }); };
 
-["sHell","sRound","sSmart","sSmartCount","sNamesCount","sGameCount","sHud"].forEach(function(id){
+["sHell","sRound","sSmart","sSmartCount","sNamesCount","sGameCount","sCustomCount","sHud"].forEach(function(id){
   var el = $(id);
   el.addEventListener("input", labels);
 });
 
-["sHell","sRound","sSmart","sSmartCount","sNamesCount","sGameCount","sHud"].forEach(function(id){
+["sHell","sRound","sSmart","sSmartCount","sNamesCount","sGameCount","sCustomCount","sHud"].forEach(function(id){
   $(id).addEventListener("change", function(){
     labels();
     post("/api/config", [
@@ -630,6 +665,7 @@ $("btnLeave").onclick = function(){ post("/api/room/leave").then(function(){ toa
       "roundSeconds="+$("sRound").value,
       "smartPick="+$("sSmart").value,
       "smartPerRound="+$("sSmartCount").value,
+      "customPerRound="+$("sCustomCount").value,
       "namesPerRound="+$("sNamesCount").value,
       "gamePerRound="+$("sGameCount").value,
       "hudScale="+$("sHud").value].join("&"));

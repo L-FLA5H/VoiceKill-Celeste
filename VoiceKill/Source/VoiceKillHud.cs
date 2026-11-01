@@ -43,6 +43,9 @@ internal static class VoiceKillHud
     private static bool _loggedError;
     private static bool _loggedSpace;
     private static int _cacheGen;
+
+    /// <summary>累计烤了多少张贴图。每轮换词、每次踩雷都会涨，用来和掉帧对时间。</summary>
+    public static int BakeCount;
     private static Texture2D _white;
 
     // ---------------- 危险词条 ----------------
@@ -290,6 +293,8 @@ internal static class VoiceKillHud
     }
 
     private static readonly Dictionary<string, Texture2D> _extra = new Dictionary<string, Texture2D>();
+    private static readonly Queue<string> _extraOrder = new Queue<string>();
+    private const int ExtraLimit = 48;
 
     private static Texture2D GetExtra(string key, Func<Texture2D> make)
     {
@@ -297,8 +302,22 @@ internal static class VoiceKillHud
         try
         {
             Texture2D made = make();
-            if (_extra.Count > 12) _extra.Clear();
+            BakeCount++;
+
+            // 以前是「超过 12 张就 _extra.Clear()」—— 清字典但没 Dispose，
+            // 显存就这么一张张漏掉；而且一清就得重新烤，踩雷瞬间会顿一下。
             _extra[key] = made;
+            _extraOrder.Enqueue(key);
+            while (_extraOrder.Count > ExtraLimit)
+            {
+                string old = _extraOrder.Dequeue();
+                if (old == key) continue;
+                if (_extra.TryGetValue(old, out Texture2D dead))
+                {
+                    try { dead.Dispose(); } catch { }
+                    _extra.Remove(old);
+                }
+            }
             return made;
         }
         catch (Exception ex) { Fail(ex); return null; }
@@ -333,6 +352,8 @@ internal static class VoiceKillHud
     private static Texture2D BakeChip(string text, Gdi.Color accent, float fontSize, int bgAlpha)
     {
         if (string.IsNullOrEmpty(text)) text = "?";
+
+        BakeCount++;
 
         int padX = (int)(fontSize * 0.52f);
         int padY = (int)(fontSize * 0.31f);

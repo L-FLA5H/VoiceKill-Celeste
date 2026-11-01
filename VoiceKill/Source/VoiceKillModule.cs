@@ -39,6 +39,12 @@ public class VoiceKillModule : EverestModule
     private volatile bool _engineReady;
     private volatile bool _startFailed;
     private volatile Verdict _pending;
+    private DateTime _levelEnteredAt = DateTime.MinValue;
+
+    // ---- 性能探针（只统计自己的耗时，和掉帧对时间用）----
+    private double _perfTickMs, _perfTickMax, _perfHudMs, _perfHudMax;
+    private int _perfFrames, _perfBakes, _perfGc0;
+    private DateTime _perfSince = DateTime.Now;
     private volatile bool _remoteKill;
     private volatile bool _rotateRequested;
     private volatile bool _configDirty;
@@ -315,31 +321,35 @@ public class VoiceKillModule : EverestModule
         hudSize.Change(i => { Cfg.HudScalePercent = i; SaveCfgPublic(); });
         sub.Add(hudSize);
 
-        sub.Add(new TextMenu.SubHeader("出词方式"));
+        sub.Add(new TextMenu.SubHeader("出词方式（每轮总数 = 这几项相加）"));
 
-        TextMenu.Slider hell = new TextMenu.Slider("其中高频地狱词", i => i + " 个", 0, 10, Cfg.HighFreqPerRound);
-        hell.Change(i => { Cfg.HighFreqPerRound = i; SaveCfgPublic(); });
-        sub.Add(hell);
-
-        TextMenu.Slider interval = new TextMenu.Slider("换词间隔", i => i + " 秒", 5, 120, Cfg.RoundSeconds);
-        interval.Change(i => { Cfg.RoundSeconds = i; SaveCfgPublic(); });
-        sub.Add(interval);
-
-        TextMenu.Slider smart = new TextMenu.Slider("智能概率", i => i + "%", 0, 100, Cfg.SmartPickPercent);
-        smart.Change(i => { Cfg.SmartPickPercent = i; SaveCfgPublic(); });
-        sub.Add(smart);
-
-        TextMenu.Slider smartCount = new TextMenu.Slider("智能词个数", i => i + " 个", 0, 8, Cfg.SmartPerRound);
-        smartCount.Change(i => { Cfg.SmartPerRound = i; SaveCfgPublic(); });
-        sub.Add(smartCount);
+        TextMenu.Slider customCount = new TextMenu.Slider("自定义词个数", i => i + " 个", 0, 10, Cfg.CustomPerRound);
+        customCount.Change(i => { Cfg.CustomPerRound = i; SaveCfgPublic(); });
+        sub.Add(customCount);
 
         TextMenu.Slider nameCount = new TextMenu.Slider("人名个数", i => i + " 个", 0, 6, Cfg.NamesPerRound);
         nameCount.Change(i => { Cfg.NamesPerRound = i; SaveCfgPublic(); });
         sub.Add(nameCount);
 
+        TextMenu.Slider hell = new TextMenu.Slider("其中高频地狱词", i => i + " 个", 0, 10, Cfg.HighFreqPerRound);
+        hell.Change(i => { Cfg.HighFreqPerRound = i; SaveCfgPublic(); });
+        sub.Add(hell);
+
+        TextMenu.Slider smartCount = new TextMenu.Slider("智能词个数", i => i + " 个", 0, 8, Cfg.SmartPerRound);
+        smartCount.Change(i => { Cfg.SmartPerRound = i; SaveCfgPublic(); });
+        sub.Add(smartCount);
+
+        TextMenu.Slider smart = new TextMenu.Slider("　└ 触发概率", i => i + "%", 0, 100, Cfg.SmartPickPercent);
+        smart.Change(i => { Cfg.SmartPickPercent = i; SaveCfgPublic(); });
+        sub.Add(smart);
+
         TextMenu.Slider gameCount = new TextMenu.Slider("游戏词个数", i => i + " 个", 0, 20, Cfg.GamePerRound);
         gameCount.Change(i => { Cfg.GamePerRound = i; SaveCfgPublic(); });
         sub.Add(gameCount);
+
+        TextMenu.Slider interval = new TextMenu.Slider("换词间隔", i => i + " 秒", 5, 120, Cfg.RoundSeconds);
+        interval.Change(i => { Cfg.RoundSeconds = i; SaveCfgPublic(); });
+        sub.Add(interval);
 
         sub.Add(new TextMenu.SubHeader("声音"));
 
@@ -437,6 +447,18 @@ public class VoiceKillModule : EverestModule
 
     private void DrawHud()
     {
+        long t0 = Stopwatch.GetTimestamp();
+        try { DrawHudCore(); }
+        finally
+        {
+            double ms = (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
+            _perfHudMs += ms;
+            if (ms > _perfHudMax) _perfHudMax = ms;
+        }
+    }
+
+    private void DrawHudCore()
+    {
         if (!Cfg.ShowInGameHud) return;
         if (_runtime == null || _startFailed) return;
 
@@ -457,6 +479,20 @@ public class VoiceKillModule : EverestModule
 
     private void Tick(Level level)
     {
+        long t0 = Stopwatch.GetTimestamp();
+        try { TickCore(level); }
+        finally
+        {
+            double ms = (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
+            _perfTickMs += ms;
+            if (ms > _perfTickMax) _perfTickMax = ms;
+            _perfFrames++;
+            PerfMaybeLog();
+        }
+    }
+
+    private void TickCore(Level level)
+    {
         // 换关、读档（SpeedrunTool 保存状态）都会换一个 Level 实例。
         // 这时客机必须马上重新拉一次词，否则要空等到房主下次换词（最长 30 秒），
         // 期间画面上是旧词、甚至一个词都没有 —— 实测被当成「词不同步」报上来过。
@@ -465,6 +501,7 @@ public class VoiceKillModule : EverestModule
             _tickLevel = level;
             _pending = null;   // 上一关/上一个场景遗留的处决不带到新关里
             _runtime?.DropBufferedAudio();   // 菜单里那半句话也别带进来
+            _levelEnteredAt = DateTime.Now;  // 进关后 1 秒内不认判定（见 OnDeath）
             RoomSync room0 = _room;
             if (room0 != null && Cfg.RoomMode == RoomRole.客户端) room0.ForceResync();
         }
@@ -512,7 +549,9 @@ public class VoiceKillModule : EverestModule
         // 过场 / 暂停 / 死亡演出期间不处决（XaphanHelper 在切换房间时空引用，崩过两次）
         if (level.Transitioning || level.FrozenOrPaused)
         {
-            if ((DateTime.Now - pending.At).TotalSeconds > 4) _pending = null;
+            // 过场/暂停时攒着的处决，超过 0.8 秒就作废：
+            // 等太久再杀，玩家会觉得「过完图突然死」，也不是他当时说的话了
+            if ((DateTime.Now - pending.At).TotalSeconds > 0.8) _pending = null;
             return;
         }
 
@@ -644,6 +683,15 @@ public class VoiceKillModule : EverestModule
             if (Monocle.Engine.Scene is not Level)
             {
                 Logger.Log(LogLevel.Debug, Tag, "非关卡场景里判中「" + (verdict.Word?.Text ?? "?") + "」，忽略");
+                return;
+            }
+
+            // 刚进图的一小会儿不认判定：读档/过场时残留的半句话、或者上一关的尾巴，
+            // 都会在这一刻冒出来，表现就是「一进图就死一次」。
+            if ((DateTime.Now - _levelEnteredAt).TotalSeconds < 1.0)
+            {
+                Logger.Log(LogLevel.Debug, Tag,
+                    "进图宽限期内判中「" + (verdict.Word?.Text ?? "?") + "」，忽略");
                 return;
             }
 
@@ -1326,6 +1374,7 @@ public class VoiceKillModule : EverestModule
         int spc = ReadInt("smartPerRound", Cfg.SmartPerRound);
         int npc = ReadInt("namesPerRound", Cfg.NamesPerRound);
         int gpc = ReadInt("gamePerRound", Cfg.GamePerRound);
+        int cpc = ReadInt("customPerRound", Cfg.CustomPerRound);
         int sh = ReadInt("showHud", Cfg.ShowInGameHud ? 1 : 0);
         int oh = ReadInt("onlyHost", Cfg.OnlyHostCanEdit ? 1 : 0);
         int rm = ReadInt("roomMode", (int)Cfg.RoomMode);
@@ -1342,6 +1391,7 @@ public class VoiceKillModule : EverestModule
         Cfg.SmartPickPercent = Math.Clamp(sp, 0, 100);
         Cfg.SmartPerRound = Math.Clamp(spc, 0, 8);
         Cfg.NamesPerRound = Math.Clamp(npc, 0, 8);
+        Cfg.CustomPerRound = Math.Clamp(cpc, 0, 10);
         Cfg.GamePerRound = Math.Clamp(gpc, 0, 30);
         Cfg.ShowInGameHud = sh == 1;
         Cfg.OnlyHostCanEdit = oh == 1;
@@ -1440,6 +1490,7 @@ public class VoiceKillModule : EverestModule
             sb.Append(",\"smartPerRound\":").Append(Cfg.SmartPerRound);
             sb.Append(",\"namesPerRound\":").Append(Cfg.NamesPerRound);
             sb.Append(",\"gamePerRound\":").Append(Cfg.GamePerRound);
+            sb.Append(",\"customPerRound\":").Append(Cfg.CustomPerRound);
             sb.Append(",\"fatal\":\"").Append(Esc(_fatal)).Append('"');
             sb.Append(",\"binDir\":\"").Append(Esc(_binDir)).Append('"');
 
@@ -1501,6 +1552,29 @@ public class VoiceKillModule : EverestModule
             sb.Append('"').Append(RoomSync.Escape(item)).Append('"');
         }
         return sb.Append(']').ToString();
+    }
+
+    /// <summary>
+    /// 每 10 秒记一条自己的耗时。以后再有人说卡，先看这行：
+    /// tick/hud 都在 1ms 以内 → 不是 mod 的锅；某一项经常 5ms+ → 就是它。
+    /// </summary>
+    private void PerfMaybeLog()
+    {
+        if ((DateTime.Now - _perfSince).TotalSeconds < 10 || _perfFrames <= 0) return;
+
+        int frames = _perfFrames;
+        int gc = GC.CollectionCount(0);
+        int bakes = VoiceKillHud.BakeCount;
+
+        Logger.Log(LogLevel.Info, Tag, string.Format(
+            "perf 10s: tick 平均 {0:0.000} 最大 {1:0.00} ms ｜ HUD 平均 {2:0.000} 最大 {3:0.00} ms ｜ 烤图 {4} ｜ GC0 +{5} ｜ {6} 帧",
+            _perfTickMs / frames, _perfTickMax, _perfHudMs / frames, _perfHudMax,
+            bakes - _perfBakes, gc - _perfGc0, frames));
+
+        _perfTickMs = 0; _perfTickMax = 0; _perfHudMs = 0; _perfHudMax = 0;
+        _perfFrames = 0; _perfBakes = bakes; _perfGc0 = gc;
+        _perfSince = DateTime.Now;
+        _perfGc0 = GC.CollectionCount(0);
     }
 
     private void LogEvent(string text, bool kill)
@@ -1569,8 +1643,9 @@ public class VoiceKillModule : EverestModule
 
     private int EffectiveRoundWords()
     {
-        int sum = Math.Max(0, Cfg.NamesPerRound) + Math.Max(0, Cfg.HighFreqPerRound)
-                + Math.Max(0, Cfg.SmartPerRound) + Math.Max(0, Cfg.GamePerRound);
+        int sum = Math.Max(0, Cfg.CustomPerRound) + Math.Max(0, Cfg.NamesPerRound)
+                + Math.Max(0, Cfg.HighFreqPerRound) + Math.Max(0, Cfg.SmartPerRound)
+                + Math.Max(0, Cfg.GamePerRound);
         return sum > 0 ? sum : Math.Max(1, Cfg.WordsPerRound);
     }
 
@@ -1581,6 +1656,7 @@ public class VoiceKillModule : EverestModule
         cfg.HighFreqPerRound = Math.Max(0, Cfg.HighFreqPerRound);
         cfg.SmartPerRound = Math.Max(0, Cfg.SmartPerRound);
         cfg.NamesPerRound = Math.Clamp(Cfg.NamesPerRound, 0, 8);
+        cfg.CustomPerRound = Math.Clamp(Cfg.CustomPerRound, 0, 10);
         cfg.GamePerRound = Math.Clamp(Cfg.GamePerRound, 0, 30);
         cfg.SmartPickChance = Cfg.OfflineSync ? 0.0 : Math.Clamp(Cfg.SmartPickPercent, 0, 100) / 100.0;
         cfg.Names = SplitWords(Cfg.Names);

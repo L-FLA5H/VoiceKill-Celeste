@@ -12,7 +12,10 @@ public sealed class DangerWordConfig
     /// <summary>每轮固定塞几个人名（0 = 不塞）。</summary>
     public int NamesPerRound = 1;
 
-    /// <summary>每轮固定塞几个「游戏词」（口语 / 正式 / 自定义词库）。</summary>
+    /// <summary>每轮塞几个自定义词（面板里自己加的）。</summary>
+    public int CustomPerRound = 2;
+
+    /// <summary>每轮塞几个内置游戏词（口语 / 正式）。</summary>
     public int GamePerRound = 0;
 
     /// <summary>每轮固定塞几个高频地狱词。实测 6~12 才够刺激，起步给 3。</summary>
@@ -111,7 +114,22 @@ public sealed class DangerWordManager
             TryAdd(m, WordSource.Manual);
         }
 
-        // 2) 人名配额
+        // 2) 自定义词配额：用户自己加的词优先，别被内置词淹没
+        var customPool = WordBank.Custom
+            .Where(w => !used.Contains(TextNormalizer.Normalize(w)))
+            .OrderBy(_ => _rng.Next())
+            .ToList();
+
+        int customCount = 0;
+        foreach (string cw in customPool)
+        {
+            if (customCount >= _cfg.CustomPerRound || picked.Count >= target) break;
+            int before = picked.Count;
+            TryAdd(cw, WordSource.Random);
+            if (picked.Count > before) customCount++;
+        }
+
+        // 3) 人名配额
         for (int i = 0; i < _cfg.NamesPerRound && picked.Count < target; i++)
         {
             var pool = _cfg.Names.Where(n => !used.Contains(TextNormalizer.Normalize(n))).ToList();
@@ -119,7 +137,7 @@ public sealed class DangerWordManager
             TryAdd(pool[_rng.Next(pool.Count)], WordSource.Name);
         }
 
-        // 3) 智能选词：按权重加权随机，不是取 Top1
+        // 4) 智能选词：按权重加权随机，不是取 Top1
         if (picked.Count < target && _rng.NextDouble() < _cfg.SmartPickChance)
         {
             List<string> candidates = _stats.Candidates(24)
@@ -137,7 +155,7 @@ public sealed class DangerWordManager
             }
         }
 
-        // 4) 高频地狱词：定额，躲不掉
+        // 5) 高频地狱词：定额，躲不掉
         var hellPool = HighFreqPool()
             .Where(w => !used.Contains(TextNormalizer.Normalize(w)))
             .OrderBy(_ => _rng.Next())
@@ -152,16 +170,9 @@ public sealed class DangerWordManager
             if (picked.Count > before) hellCount++;
         }
 
-        // 5) 游戏词库定额（口语 / 正式 / 自定义）
+        // 6) 内置游戏词定额（口语 / 正式）
         //    以前只能调「高频」和「智能」的个数，游戏词是补满时随机撞上的，
         //    想要多一点「冲刺 / wavedash」这种就只能靠运气。
-        // 自定义词排前面：用户自己加的词如果和上百个内置词一起洗牌，
-        // 基本抽不到（面板上「加了词但从来不出」就是这个原因）。
-        var customPool = WordBank.Custom
-            .Where(w => !used.Contains(TextNormalizer.Normalize(w)))
-            .OrderBy(_ => _rng.Next())
-            .ToList();
-
         var builtinPool = WordBank.Casual.Concat(WordBank.Formal)
             .Where(w => !used.Contains(TextNormalizer.Normalize(w)))
             .OrderBy(_ => _rng.Next())
@@ -178,7 +189,7 @@ public sealed class DangerWordManager
             if (picked.Count > before) gameCount++;
         }
 
-        // 6) 随机词库补满
+        // 7) 随机词库补满
         var filler = gamePool
             .Where(w => !used.Contains(TextNormalizer.Normalize(w)))
             .OrderBy(_ => _rng.Next())
